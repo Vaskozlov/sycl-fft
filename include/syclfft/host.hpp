@@ -12,7 +12,7 @@
 
 namespace syclfft::host {
 
-template <class Scalar> class SYCLFFT_HOST_EXPORT plan {
+template <class Scalar> class plan {
   static_assert(std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>,
                 "syclfft supports float and double precision");
 
@@ -80,7 +80,14 @@ plan<Scalar> plan_dft_3d(std::size_t n0, std::size_t n1, std::size_t n2,
   return plan_many_dft<Scalar>({n0, n1, n2}, 1, direction, options);
 }
 
+#if !defined(SYCLFFT_BUILDING_HOST)
+#if defined(_WIN32)
+extern template class SYCLFFT_HOST_EXPORT plan<float>;
+extern template class SYCLFFT_HOST_EXPORT plan<double>;
+#else
 extern template class plan<float>;
 extern template class plan<double>;
+#endif
+#endif
 
 } // namespace syclfft::host

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <complex>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -19,16 +20,50 @@ void check(bool condition, const std::string &message) {
     throw std::runtime_error(message);
 }
 
-template <class T>
-T *malloc_host_accessible(std::size_t count, sycl::queue &queue) {
-  const auto device = queue.get_device();
-  if (device.has(sycl::aspect::usm_host_allocations))
-    return sycl::malloc_host<T>(count, queue);
-  if (device.has(sycl::aspect::usm_shared_allocations))
-    return sycl::malloc_shared<T>(count, queue);
-  throw std::runtime_error(
-      "test device supports neither shared nor host USM allocations");
-}
+template <class T> class usm_buffer {
+public:
+  usm_buffer(std::size_t count, sycl::queue &queue,
+             bool require_host_accessible = false)
+      : queue_(&queue), count_(count) {
+    const auto device = queue.get_device();
+    if (!require_host_accessible &&
+        device.has(sycl::aspect::usm_device_allocations)) {
+      pointer_ = sycl::malloc_device<T>(count, queue);
+    } else if (device.has(sycl::aspect::usm_host_allocations)) {
+      pointer_ = sycl::malloc_host<T>(count, queue);
+    } else if (device.has(sycl::aspect::usm_shared_allocations)) {
+      pointer_ = sycl::malloc_shared<T>(count, queue);
+    }
+    if (!pointer_) {
+      throw std::runtime_error(require_host_accessible
+                                   ? "test device has no host-accessible USM"
+                                   : "test device has no usable USM allocation");
+    }
+  }
+
+  ~usm_buffer() { sycl::free(pointer_, *queue_); }
+
+  usm_buffer(const usm_buffer &) = delete;
+  usm_buffer &operator=(const usm_buffer &) = delete;
+
+  [[nodiscard]] T *get() const noexcept { return pointer_; }
+
+  void write(std::span<const T> values) {
+    check(values.size() == count_, "USM upload size mismatch");
+    queue_->memcpy(pointer_, values.data(), count_ * sizeof(T)).wait_and_throw();
+  }
+
+  [[nodiscard]] std::vector<T> read() const {
+    std::vector<T> values(count_);
+    queue_->memcpy(values.data(), pointer_, count_ * sizeof(T)).wait_and_throw();
+    return values;
+  }
+
+private:
+  sycl::queue *queue_{};
+  std::size_t count_{};
+  T *pointer_{};
+};
 
 template <class Scalar>
 std::vector<std::complex<Scalar>>
@@ -105,24 +140,26 @@ void run_many(sycl::queue &queue, std::vector<std::size_t> shape,
   }
   const auto expected =
       reference_many(source, shape, batch_count, syclfft::direction::forward);
-  auto *input = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
-  auto *output = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
+  std::vector<syclfft::complex<Scalar>> device_source(count);
   for (std::size_t i = 0; i < count; ++i)
-    input[i] = {source[i].real(), source[i].imag()};
+    device_source[i] = {source[i].real(), source[i].imag()};
+  usm_buffer<syclfft::complex<Scalar>> input(count, queue);
+  usm_buffer<syclfft::complex<Scalar>> output(count, queue);
+  input.write(device_source);
   auto fft = syclfft::plan_many_dft<Scalar>(
       queue, shape, batch_count, syclfft::direction::forward,
       {.preferred_provider = syclfft::provider::portable_sycl});
-  fft.execute(input, output).wait_and_throw();
+  fft.execute(input.get(), output.get()).wait_and_throw();
+  const auto actual_values = output.read();
   const auto tolerance =
       std::is_same_v<Scalar, float> ? Scalar{8e-4} : Scalar{5e-11};
   for (std::size_t i = 0; i < count; ++i) {
-    const std::complex<Scalar> actual{output[i].real(), output[i].imag()};
+    const std::complex<Scalar> actual{actual_values[i].real(),
+                                      actual_values[i].imag()};
     check(std::abs(actual - expected[i]) <=
               tolerance * (Scalar{1} + std::abs(expected[i])),
           "multidimensional or batch mismatch at element " + std::to_string(i));
   }
-  sycl::free(input, queue);
-  sycl::free(output, queue);
 }
 
 template <class Function>
@@ -146,20 +183,22 @@ void run_1d(sycl::queue &queue, std::size_t count, syclfft::direction direction,
                  static_cast<Scalar>((i * 3 + 2) % 7) / Scalar{5}};
   }
   const auto expected = direct_dft(source, direction, normalization);
-  auto *input = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
-  auto *output =
-      placement == syclfft::placement::in_place
-          ? input
-          : malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
-  auto *repeated_output =
-      placement == syclfft::placement::out_of_place
-          ? malloc_host_accessible<syclfft::complex<Scalar>>(count, queue)
-          : nullptr;
-  check(input && output &&
-            (placement == syclfft::placement::in_place || repeated_output),
-        "USM allocation failed");
+  std::vector<syclfft::complex<Scalar>> device_source(count);
   for (std::size_t i = 0; i < count; ++i)
-    input[i] = {source[i].real(), source[i].imag()};
+    device_source[i] = {source[i].real(), source[i].imag()};
+  usm_buffer<syclfft::complex<Scalar>> input(count, queue);
+  std::unique_ptr<usm_buffer<syclfft::complex<Scalar>>> output_storage;
+  std::unique_ptr<usm_buffer<syclfft::complex<Scalar>>> repeated_storage;
+  if (placement == syclfft::placement::out_of_place) {
+    output_storage =
+        std::make_unique<usm_buffer<syclfft::complex<Scalar>>>(count, queue);
+    repeated_storage =
+        std::make_unique<usm_buffer<syclfft::complex<Scalar>>>(count, queue);
+  }
+  auto *output = output_storage ? output_storage->get() : input.get();
+  auto *repeated_output =
+      repeated_storage ? repeated_storage->get() : nullptr;
+  input.write(device_source);
   auto fft = syclfft::plan_dft_1d<Scalar>(
       queue, count, direction,
       {.placement = placement,
@@ -168,26 +207,32 @@ void run_1d(sycl::queue &queue, std::size_t count, syclfft::direction direction,
   auto dependency =
       queue.submit([&](sycl::handler &handler) { handler.single_task([] {}); });
   auto event = placement == syclfft::placement::in_place
-                   ? fft.execute(input, dependency)
-                   : fft.execute(input, output, dependency);
+                   ? fft.execute(input.get(), dependency)
+                   : fft.execute(input.get(), output, dependency);
   sycl::event repeated;
   if (repeated_output)
-    repeated = fft.execute(input, repeated_output);
+    repeated = fft.execute(input.get(), repeated_output);
   event.wait_and_throw();
   if (repeated_output)
     repeated.wait_and_throw();
+  const auto actual_values =
+      output_storage ? output_storage->read() : input.read();
+  const auto repeated_values =
+      repeated_storage ? repeated_storage->read()
+                       : std::vector<syclfft::complex<Scalar>>{};
   const auto tolerance =
       std::is_same_v<Scalar, float> ? Scalar{4e-4} : Scalar{2e-11};
   for (std::size_t i = 0; i < count; ++i) {
-    const std::complex<Scalar> actual{output[i].real(), output[i].imag()};
+    const std::complex<Scalar> actual{actual_values[i].real(),
+                                      actual_values[i].imag()};
     if (std::abs(actual - expected[i]) >
         tolerance * (Scalar{1} + std::abs(expected[i]))) {
       throw std::runtime_error("portable mismatch at element " +
                                std::to_string(i));
     }
     if (repeated_output) {
-      const std::complex<Scalar> repeated_actual{repeated_output[i].real(),
-                                                 repeated_output[i].imag()};
+      const std::complex<Scalar> repeated_actual{repeated_values[i].real(),
+                                                 repeated_values[i].imag()};
       check(std::abs(repeated_actual - expected[i]) <=
                 tolerance * (Scalar{1} + std::abs(expected[i])),
             "serialized repeated execution mismatch");
@@ -198,11 +243,6 @@ void run_1d(sycl::queue &queue, std::size_t count, syclfft::direction direction,
   check(fft.scratch_size_bytes() >=
             2 * count * sizeof(syclfft::complex<Scalar>),
         "portable scratch size is too small");
-  if (output != input)
-    sycl::free(output, queue);
-  if (repeated_output)
-    sycl::free(repeated_output, queue);
-  sycl::free(input, queue);
 }
 
 } // namespace
@@ -259,29 +299,28 @@ int main() try {
   }
 
   {
-    auto *input = malloc_host_accessible<syclfft::complex<float>>(13, queue);
-    auto *spectrum =
-        malloc_host_accessible<syclfft::complex<float>>(13, queue);
-    auto *restored =
-        malloc_host_accessible<syclfft::complex<float>>(13, queue);
+    usm_buffer<syclfft::complex<float>> input(13, queue);
+    usm_buffer<syclfft::complex<float>> spectrum(13, queue);
+    usm_buffer<syclfft::complex<float>> restored(13, queue);
+    std::vector<syclfft::complex<float>> source(13);
     for (std::size_t i = 0; i < 13; ++i)
-      input[i] = {static_cast<float>(i) / 7.0f,
-                  static_cast<float>(i % 3) / 5.0f};
+      source[i] = {static_cast<float>(i) / 7.0f,
+                   static_cast<float>(i % 3) / 5.0f};
+    input.write(source);
     auto forward =
         syclfft::plan_dft_1d<float>(queue, 13, syclfft::direction::forward);
     auto backward = syclfft::plan_dft_1d<float>(
         queue, 13, syclfft::direction::backward,
         {.normalization = syclfft::normalization::backward});
-    const auto forward_done = forward.execute(input, spectrum);
-    backward.execute(spectrum, restored, forward_done).wait_and_throw();
+    const auto forward_done = forward.execute(input.get(), spectrum.get());
+    backward.execute(spectrum.get(), restored.get(), forward_done)
+        .wait_and_throw();
+    const auto actual = restored.read();
     for (std::size_t i = 0; i < 13; ++i) {
-      check(std::abs(static_cast<std::complex<float>>(restored[i]) -
-                     static_cast<std::complex<float>>(input[i])) < 2e-3f,
+      check(std::abs(static_cast<std::complex<float>>(actual[i]) -
+                     static_cast<std::complex<float>>(source[i])) < 2e-3f,
             "portable round trip mismatch");
     }
-    sycl::free(input, queue);
-    sycl::free(spectrum, queue);
-    sycl::free(restored, queue);
   }
 
   const auto providers = syclfft::query_providers(queue);
@@ -294,49 +333,46 @@ int main() try {
           "automatic CPU selection did not safely fall back to portable SYCL");
   }
   {
-    auto *input_a = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *input_b = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *output_a =
-        malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *output_b =
-        malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    usm_buffer<syclfft::complex<float>> input_a(8, queue);
+    usm_buffer<syclfft::complex<float>> input_b(8, queue);
+    usm_buffer<syclfft::complex<float>> output_a(8, queue);
+    usm_buffer<syclfft::complex<float>> output_b(8, queue);
+    std::vector<syclfft::complex<float>> source_a(8);
+    std::vector<syclfft::complex<float>> source_b(8);
     for (std::size_t i = 0; i < 8; ++i) {
-      input_a[i] = {i == 0 ? 1.0f : 0.0f, 0.0f};
-      input_b[i] = {i == 1 ? 1.0f : 0.0f, 0.0f};
+      source_a[i] = {i == 0 ? 1.0f : 0.0f, 0.0f};
+      source_b[i] = {i == 1 ? 1.0f : 0.0f, 0.0f};
     }
+    input_a.write(source_a);
+    input_b.write(source_b);
     auto first =
         syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
     auto second =
         syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
-    auto first_done = first.execute(input_a, output_a);
-    auto second_done = second.execute(input_b, output_b);
+    auto first_done = first.execute(input_a.get(), output_a.get());
+    auto second_done = second.execute(input_b.get(), output_b.get());
     first_done.wait_and_throw();
     second_done.wait_and_throw();
-    check(std::abs(output_a[0].real() - 1.0f) < 1e-5f &&
-              std::abs(output_b[0].real() - 1.0f) < 1e-5f,
+    const auto actual_a = output_a.read();
+    const auto actual_b = output_b.read();
+    check(std::abs(actual_a[0].real() - 1.0f) < 1e-5f &&
+              std::abs(actual_b[0].real() - 1.0f) < 1e-5f,
           "concurrent plan execution failed");
-    sycl::free(input_a, queue);
-    sycl::free(input_b, queue);
-    sycl::free(output_a, queue);
-    sycl::free(output_b, queue);
   }
 
   const sycl::context foreign_context{queue.get_device()};
   if (foreign_context != queue.get_context()) {
     sycl::queue foreign_queue{foreign_context, queue.get_device()};
-    auto *foreign_input =
-        malloc_host_accessible<syclfft::complex<float>>(8, foreign_queue);
-    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    if (sycl::get_pointer_type(foreign_input, queue.get_context()) ==
+    usm_buffer<syclfft::complex<float>> foreign_input(8, foreign_queue);
+    usm_buffer<syclfft::complex<float>> output(8, queue);
+    if (sycl::get_pointer_type(foreign_input.get(), queue.get_context()) ==
         sycl::usm::alloc::unknown) {
       expect_error(syclfft::error_code::invalid_pointer, [&] {
         auto fft =
             syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
-        fft.execute(foreign_input, output);
+        fft.execute(foreign_input.get(), output.get());
       });
     }
-    sycl::free(foreign_input, foreign_queue);
-    sycl::free(output, queue);
   }
   const auto fftw_status =
       std::find_if(providers.begin(), providers.end(),
@@ -348,48 +384,50 @@ int main() try {
     source[1] = {1.0f, -0.5f};
     const auto expected = direct_dft(source, syclfft::direction::forward,
                                      syclfft::normalization::none);
-    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    std::vector<syclfft::complex<float>> device_source(8);
     for (std::size_t i = 0; i < 8; ++i)
-      input[i] = source[i];
+      device_source[i] = source[i];
+    usm_buffer<syclfft::complex<float>> input(8, queue, true);
+    usm_buffer<syclfft::complex<float>> output(8, queue, true);
+    input.write(device_source);
     auto fft = syclfft::plan_dft_1d<float>(
         queue, 8, syclfft::direction::forward,
         {.preferred_provider = syclfft::provider::fftw});
-    fft.execute(input, output).wait_and_throw();
+    fft.execute(input.get(), output.get()).wait_and_throw();
+    const auto actual = output.read();
     for (std::size_t i = 0; i < 8; ++i) {
-      check(std::abs(static_cast<std::complex<float>>(output[i]) -
+      check(std::abs(static_cast<std::complex<float>>(actual[i]) -
                      expected[i]) < 1e-4f,
             "explicit FFTW SYCL path mismatch");
     }
-    sycl::free(input, queue);
-    sycl::free(output, queue);
   }
 
   {
-    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    usm_buffer<syclfft::complex<float>> input(8, queue);
+    usm_buffer<syclfft::complex<float>> output(8, queue);
+    auto *input_pointer = input.get();
     auto first_half = queue.submit([&](sycl::handler &handler) {
       handler.parallel_for(sycl::range<1>{4}, [=](sycl::id<1> i) {
-        input[i[0]] = {i[0] == 0 ? 1.0f : 0.0f, 0.0f};
+        input_pointer[i[0]] = {i[0] == 0 ? 1.0f : 0.0f, 0.0f};
       });
     });
     auto second_half = queue.submit([&](sycl::handler &handler) {
       handler.parallel_for(sycl::range<1>{4}, [=](sycl::id<1> i) {
-        input[i[0] + 4] = {0.0f, 0.0f};
+        input_pointer[i[0] + 4] = {0.0f, 0.0f};
       });
     });
     const std::array dependencies{first_half, second_half};
     auto fft =
         syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
-    fft.execute(input, output, std::span<const sycl::event>{dependencies})
+    fft.execute(input.get(), output.get(),
+                std::span<const sycl::event>{dependencies})
         .wait_and_throw();
+    const auto actual = output.read();
     for (std::size_t i = 0; i < 8; ++i) {
-      check(std::abs(output[i].real() - 1.0f) < 1e-5f &&
-                std::abs(output[i].imag()) < 1e-5f,
+      check(std::abs(actual[i].real() - 1.0f) < 1e-5f &&
+                std::abs(actual[i].imag()) < 1e-5f,
             "event-span dependency ordering failed");
     }
-    sycl::free(input, queue);
-    sycl::free(output, queue);
   }
 
   expect_error(syclfft::error_code::provider_unavailable, [&] {
@@ -406,15 +444,9 @@ int main() try {
     auto fft = syclfft::plan_dft_1d<float>(
         queue, 8, syclfft::direction::forward,
         {.placement = syclfft::placement::in_place});
-    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
-    try {
-      fft.execute(input, output);
-    } catch (...) {
-      sycl::free(input, queue);
-      sycl::free(output, queue);
-      throw;
-    }
+    usm_buffer<syclfft::complex<float>> input(8, queue);
+    usm_buffer<syclfft::complex<float>> output(8, queue);
+    fft.execute(input.get(), output.get());
   });
   expect_error(syclfft::error_code::invalid_state, [&] {
     auto original =

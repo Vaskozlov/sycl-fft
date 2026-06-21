@@ -11,6 +11,7 @@ permissions:
 env:
   ACPP_VERSION: "25.10.0"
   DPCPP_VERSION: "6.3.0"
+  POCL_VERSION: "7.0.0"
 
 jobs:
   macos-host:
@@ -49,6 +50,7 @@ jobs:
           -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang"
           -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"
           -DAdaptiveCpp_DIR="$(brew --prefix adaptivecpp)/lib/cmake/AdaptiveCpp"
+          -DACPP_TARGETS=omp
           -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
@@ -91,6 +93,7 @@ jobs:
           -DCMAKE_C_COMPILER=clang
           -DCMAKE_CXX_COMPILER=clang++
           -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
+          -DACPP_TARGETS=omp
           -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
@@ -110,15 +113,37 @@ jobs:
       - run: cmake --build consumer
       - run: ./consumer/test_sycl
 
-  linux-dpcpp-cpu:
+  linux-dpcpp-opencl:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        opencl_runtime: [pocl, intel]
     steps:
       - uses: actions/checkout@v7
-      - name: Install CPU OpenCL runtime
+      - name: Install build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          cmake ninja-build curl pocl-opencl-icd ocl-icd-libopencl1
-          libtbb12 libhwloc15 libzstd1
+          ca-certificates clinfo cmake curl gnupg ninja-build
+          ocl-icd-libopencl1 libtbb12 libhwloc15 libzstd1
+      - name: Install PoCL CPU runtime
+        if: matrix.opencl_runtime == 'pocl'
+        run: sudo apt-get install -y pocl-opencl-icd
+      - name: Install Intel CPU OpenCL runtime
+        if: matrix.opencl_runtime == 'intel'
+        run: |
+          curl --fail --location --retry 3 \
+            https://apt.repos.intel.com/oneapi/gpgkey \
+            --output "$RUNNER_TEMP/oneapi.asc"
+          gpg --dearmor --yes \
+            --output "$RUNNER_TEMP/oneapi-archive-keyring.gpg" \
+            "$RUNNER_TEMP/oneapi.asc"
+          sudo install -m 0644 "$RUNNER_TEMP/oneapi-archive-keyring.gpg" \
+            /usr/share/keyrings/oneapi-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y intel-oneapi-runtime-opencl
       - uses: actions/cache@v5
         id: cache-dpcpp
         with:
@@ -148,13 +173,14 @@ jobs:
           -DSYCLFFT_CUFFT=OFF
           -DSYCLFFT_BUILD_TESTS=ON
       - run: cmake --build build
+      - run: clinfo -l
       - run: sycl-ls
-      - name: Run on PoCL CPU device
+      - name: Run on OpenCL CPU device
         env:
           ONEAPI_DEVICE_SELECTOR: opencl:cpu
         run: ./build/tests/syclfft_sycl_tests
 
-  windows-dpcpp-build:
+  windows-dpcpp-pocl:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -172,12 +198,25 @@ jobs:
             "https://github.com/intel/llvm/releases/download/v${env:DPCPP_VERSION}/sycl_windows.tar.gz" `
             --output "$env:RUNNER_TEMP/sycl_windows.tar.gz"
           tar -xzf "$env:RUNNER_TEMP/sycl_windows.tar.gz" -C "$HOME/dpcpp"
+      - name: Install PoCL CPU runtime
+        shell: pwsh
+        run: |
+          $installer = "$env:RUNNER_TEMP/PoCL-win64.exe"
+          curl.exe --fail --location --retry 3 `
+            "https://github.com/pocl/pocl/releases/download/v7.0/PoCL-${env:POCL_VERSION}-NOCONF-win64.exe" `
+            --output $installer
+          $process = Start-Process -FilePath $installer `
+            -ArgumentList "/S", "/D=C:\pocl" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "PoCL installer failed with exit code $($process.ExitCode)"
+          }
       - name: Configure and build
         shell: cmd
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set "DPCPP_ROOT=%USERPROFILE%\dpcpp\sycl_windows"
-          set "PATH=%DPCPP_ROOT%\bin;%PATH%"
+          set "PATH=C:\pocl\bin;%DPCPP_ROOT%\bin;%PATH%"
+          set "POCL_DEVICES=cpu"
           cmake -S . -B build -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER=%DPCPP_ROOT%\bin\clang.exe ^
@@ -188,6 +227,9 @@ jobs:
             -DSYCLFFT_CUFFT=OFF ^
             -DSYCLFFT_BUILD_TESTS=ON
           cmake --build build
+          sycl-ls
+          set "ONEAPI_DEVICE_SELECTOR=opencl:cpu"
+          build\tests\syclfft_sycl_tests.exe
 
   windows-adaptivecpp-cpu:
     runs-on: windows-2022

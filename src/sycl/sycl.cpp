@@ -849,7 +849,7 @@ std::vector<provider_status> query_providers(const sycl::queue &queue) {
   return result;
 }
 
-template class plan<float>;
-template class plan<double>;
+template class SYCLFFT_SYCL_EXPORT plan<float>;
+template class SYCLFFT_SYCL_EXPORT plan<double>;
 
 } // namespace syclfft

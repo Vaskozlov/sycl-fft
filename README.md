@@ -143,11 +143,14 @@ Installed CMake targets and matching Conan components are `syclfft::host` and
 ## Continuous integration
 
 The GitHub Actions workflow uses GitHub-hosted runners only. It covers macOS
-FFTW, macOS/Linux/Windows AdaptiveCpp CPU execution, Linux Open DPC++ execution
-on PoCL, Windows Open DPC++ compilation, install-tree consumers, and a
-compile-only cuFFT plugin build in an NVIDIA CUDA development container. The
-Windows AdaptiveCpp job uses the official LLVM 20 nightly binary from the
-project's `develop` workflow. No GPU or self-hosted runner is required.
+FFTW; AdaptiveCpp OpenMP CPU execution on macOS, Linux, and Windows; Open DPC++
+execution through PoCL and Intel CPU OpenCL runtimes on Linux; Open DPC++
+execution through PoCL on Windows; install-tree consumers; and a compile-only
+cuFFT plugin build in an NVIDIA CUDA development container. The Windows
+AdaptiveCpp job uses the official LLVM 20 nightly binary from the project's
+`develop` workflow. The Windows PoCL job uses the official 7.0 installer because
+PoCL 7.1 does not publish a Windows installer. No GPU or self-hosted runner is
+required.
 
 ## License
 

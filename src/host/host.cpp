@@ -165,7 +165,7 @@ std::size_t plan<Scalar>::scratch_size_bytes() const noexcept {
   return buffers * impl_->element_count_ * sizeof(complex_type);
 }
 
-template class plan<float>;
-template class plan<double>;
+template class SYCLFFT_HOST_EXPORT plan<float>;
+template class SYCLFFT_HOST_EXPORT plan<double>;
 
 } // namespace syclfft::host

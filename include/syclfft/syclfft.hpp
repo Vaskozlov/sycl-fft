@@ -39,7 +39,7 @@ namespace syclfft {
 
 template <class Scalar> using complex = sycl::ext::cplx::complex<Scalar>;
 
-template <class Scalar> class SYCLFFT_SYCL_EXPORT plan {
+template <class Scalar> class plan {
   static_assert(std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>,
                 "syclfft supports float and double precision");
 
@@ -123,7 +123,14 @@ plan<Scalar> plan_dft_3d(sycl::queue queue, std::size_t n0, std::size_t n1,
                                options);
 }
 
+#if !defined(SYCLFFT_BUILDING_SYCL)
+#if defined(_WIN32)
+extern template class SYCLFFT_SYCL_EXPORT plan<float>;
+extern template class SYCLFFT_SYCL_EXPORT plan<double>;
+#else
 extern template class plan<float>;
 extern template class plan<double>;
+#endif
+#endif
 
 } // namespace syclfft
