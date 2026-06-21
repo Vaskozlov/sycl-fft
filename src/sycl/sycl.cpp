@@ -446,8 +446,8 @@ public:
     if (selected_provider_ == provider::cufft) {
       detail::cufft_plan_config_v1 config{};
       config.double_precision = std::is_same_v<Scalar, double>;
-      config.direction = direction_;
-      config.placement = options_.placement;
+      config.transform_direction = direction_;
+      config.transform_placement = options_.placement;
       config.rank = static_cast<std::uint32_t>(lengths_.size());
       std::copy(lengths_.begin(), lengths_.end(), config.lengths);
       config.batch_count = batch_count_;

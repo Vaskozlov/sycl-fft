@@ -19,6 +19,17 @@ void check(bool condition, const std::string &message) {
     throw std::runtime_error(message);
 }
 
+template <class T>
+T *malloc_host_accessible(std::size_t count, sycl::queue &queue) {
+  const auto device = queue.get_device();
+  if (device.has(sycl::aspect::usm_host_allocations))
+    return sycl::malloc_host<T>(count, queue);
+  if (device.has(sycl::aspect::usm_shared_allocations))
+    return sycl::malloc_shared<T>(count, queue);
+  throw std::runtime_error(
+      "test device supports neither shared nor host USM allocations");
+}
+
 template <class Scalar>
 std::vector<std::complex<Scalar>>
 direct_dft(const std::vector<std::complex<Scalar>> &input,
@@ -94,8 +105,8 @@ void run_many(sycl::queue &queue, std::vector<std::size_t> shape,
   }
   const auto expected =
       reference_many(source, shape, batch_count, syclfft::direction::forward);
-  auto *input = sycl::malloc_shared<syclfft::complex<Scalar>>(count, queue);
-  auto *output = sycl::malloc_shared<syclfft::complex<Scalar>>(count, queue);
+  auto *input = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
+  auto *output = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
   for (std::size_t i = 0; i < count; ++i)
     input[i] = {source[i].real(), source[i].imag()};
   auto fft = syclfft::plan_many_dft<Scalar>(
@@ -135,14 +146,14 @@ void run_1d(sycl::queue &queue, std::size_t count, syclfft::direction direction,
                  static_cast<Scalar>((i * 3 + 2) % 7) / Scalar{5}};
   }
   const auto expected = direct_dft(source, direction, normalization);
-  auto *input = sycl::malloc_shared<syclfft::complex<Scalar>>(count, queue);
+  auto *input = malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
   auto *output =
       placement == syclfft::placement::in_place
           ? input
-          : sycl::malloc_shared<syclfft::complex<Scalar>>(count, queue);
+          : malloc_host_accessible<syclfft::complex<Scalar>>(count, queue);
   auto *repeated_output =
       placement == syclfft::placement::out_of_place
-          ? sycl::malloc_shared<syclfft::complex<Scalar>>(count, queue)
+          ? malloc_host_accessible<syclfft::complex<Scalar>>(count, queue)
           : nullptr;
   check(input && output &&
             (placement == syclfft::placement::in_place || repeated_output),
@@ -248,9 +259,11 @@ int main() try {
   }
 
   {
-    auto *input = sycl::malloc_shared<syclfft::complex<float>>(13, queue);
-    auto *spectrum = sycl::malloc_shared<syclfft::complex<float>>(13, queue);
-    auto *restored = sycl::malloc_shared<syclfft::complex<float>>(13, queue);
+    auto *input = malloc_host_accessible<syclfft::complex<float>>(13, queue);
+    auto *spectrum =
+        malloc_host_accessible<syclfft::complex<float>>(13, queue);
+    auto *restored =
+        malloc_host_accessible<syclfft::complex<float>>(13, queue);
     for (std::size_t i = 0; i < 13; ++i)
       input[i] = {static_cast<float>(i) / 7.0f,
                   static_cast<float>(i % 3) / 5.0f};
@@ -281,10 +294,12 @@ int main() try {
           "automatic CPU selection did not safely fall back to portable SYCL");
   }
   {
-    auto *input_a = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *input_b = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *output_a = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *output_b = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
+    auto *input_a = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *input_b = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *output_a =
+        malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *output_b =
+        malloc_host_accessible<syclfft::complex<float>>(8, queue);
     for (std::size_t i = 0; i < 8; ++i) {
       input_a[i] = {i == 0 ? 1.0f : 0.0f, 0.0f};
       input_b[i] = {i == 1 ? 1.0f : 0.0f, 0.0f};
@@ -310,8 +325,8 @@ int main() try {
   if (foreign_context != queue.get_context()) {
     sycl::queue foreign_queue{foreign_context, queue.get_device()};
     auto *foreign_input =
-        sycl::malloc_shared<syclfft::complex<float>>(8, foreign_queue);
-    auto *output = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
+        malloc_host_accessible<syclfft::complex<float>>(8, foreign_queue);
+    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
     if (sycl::get_pointer_type(foreign_input, queue.get_context()) ==
         sycl::usm::alloc::unknown) {
       expect_error(syclfft::error_code::invalid_pointer, [&] {
@@ -333,8 +348,8 @@ int main() try {
     source[1] = {1.0f, -0.5f};
     const auto expected = direct_dft(source, syclfft::direction::forward,
                                      syclfft::normalization::none);
-    auto *input = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *output = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
+    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
     for (std::size_t i = 0; i < 8; ++i)
       input[i] = source[i];
     auto fft = syclfft::plan_dft_1d<float>(
@@ -351,8 +366,8 @@ int main() try {
   }
 
   {
-    auto *input = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *output = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
+    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
     auto first_half = queue.submit([&](sycl::handler &handler) {
       handler.parallel_for(sycl::range<1>{4}, [=](sycl::id<1> i) {
         input[i[0]] = {i[0] == 0 ? 1.0f : 0.0f, 0.0f};
@@ -391,8 +406,8 @@ int main() try {
     auto fft = syclfft::plan_dft_1d<float>(
         queue, 8, syclfft::direction::forward,
         {.placement = syclfft::placement::in_place});
-    auto *input = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
-    auto *output = sycl::malloc_shared<syclfft::complex<float>>(8, queue);
+    auto *input = malloc_host_accessible<syclfft::complex<float>>(8, queue);
+    auto *output = malloc_host_accessible<syclfft::complex<float>>(8, queue);
     try {
       fft.execute(input, output);
     } catch (...) {

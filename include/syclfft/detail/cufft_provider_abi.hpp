@@ -15,8 +15,8 @@ namespace syclfft::detail {
 struct cufft_plan_config_v1 {
   std::uint32_t abi_version{SYCLFFT_CUFFT_PROVIDER_ABI_VERSION};
   bool double_precision{};
-  direction direction{};
-  placement placement{};
+  direction transform_direction{};
+  placement transform_placement{};
   std::uint32_t rank{};
   std::size_t lengths[3]{};
   std::size_t batch_count{};

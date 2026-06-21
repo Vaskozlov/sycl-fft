@@ -75,7 +75,7 @@ class cufft_plan_impl {
 public:
   cufft_plan_impl(sycl::queue queue,
                   const syclfft::detail::cufft_plan_config_v1 &config)
-      : queue_(std::move(queue)), direction_(config.direction),
+      : queue_(std::move(queue)), direction_(config.transform_direction),
         double_precision_(config.double_precision) {
     if (!is_cuda(queue_))
       throw std::runtime_error("queue is not CUDA-backed");
