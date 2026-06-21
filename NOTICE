@@ -1,0 +1,13 @@
+syclfft
+Copyright 2026 syclfft contributors
+
+The vendored SyclCPLX header is adapted from the LLVM libc++ complex
+implementation and is licensed under Apache-2.0 WITH LLVM-exception.
+Upstream: https://github.com/argonne-lcf/SyclCPLX
+Pinned commit: 32684c725eace3ee49146dbec2737b6bc2cc942d
+The LLVM license exception text is distributed in
+third_party/syclcplx/LLVM-EXCEPTION.txt.
+
+The optional FFTW provider links to FFTW, which is licensed under GPL-2.0 or
+later. Distributing a binary containing that provider may impose GPL
+obligations. The Apache-2.0 core and SYCL provider do not contain FFTW code.

@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/syclfftTargets.cmake")
+
+set(syclfft_core_FOUND FALSE)
+set(syclfft_host_FOUND FALSE)
+set(syclfft_sycl_FOUND FALSE)
+if(TARGET syclfft::core)
+  set(syclfft_core_FOUND TRUE)
+endif()
+if(TARGET syclfft::host)
+  set(syclfft_host_FOUND TRUE)
+endif()
+if(TARGET syclfft::sycl)
+  set(syclfft_sycl_FOUND TRUE)
+endif()
+check_required_components(syclfft)

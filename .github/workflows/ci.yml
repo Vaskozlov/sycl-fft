@@ -1,0 +1,248 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACPP_VERSION: "25.10.0"
+  DPCPP_VERSION: "6.3.0"
+
+jobs:
+  macos-host:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install cmake ninja fftw
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DSYCLFFT_BUILD_SYCL=OFF
+          -DSYCLFFT_USE_SYSTEM_FFTW=ON
+          -DSYCLFFT_BUILD_TESTS=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+      - run: cmake --install build --prefix "$PWD/install"
+      - name: Test installed host target
+        run: >-
+          cmake -S test_package -B consumer -G Ninja
+          -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
+          -DSYCLFFT_TEST_HOST=ON
+          -DSYCLFFT_TEST_SYCL=OFF
+      - run: cmake --build consumer
+      - run: ./consumer/test_host
+
+  macos-adaptivecpp-cpu:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install adaptivecpp cmake llvm ninja
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang"
+          -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"
+          -DAdaptiveCpp_DIR="$(brew --prefix adaptivecpp)/lib/cmake/AdaptiveCpp"
+          -DSYCLFFT_BUILD_HOST=OFF
+          -DSYCLFFT_BUILD_SYCL=ON
+          -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
+          -DSYCLFFT_CUFFT=OFF
+          -DSYCLFFT_BUILD_TESTS=ON
+      - run: cmake --build build
+      - run: ./build/tests/syclfft_sycl_tests
+
+  linux-adaptivecpp-cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          cmake ninja-build g++ git python3
+          libboost-context-dev libboost-fiber-dev libboost-test-dev
+      - uses: actions/cache@v4
+        id: cache-acpp
+        with:
+          path: ~/adaptivecpp
+          key: adaptivecpp-${{ runner.os }}-${{ env.ACPP_VERSION }}-omp-library-only
+      - name: Build AdaptiveCpp
+        if: steps.cache-acpp.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch "v${ACPP_VERSION}" --depth 1 \
+            https://github.com/AdaptiveCpp/AdaptiveCpp.git "$RUNNER_TEMP/AdaptiveCpp"
+          cmake -S "$RUNNER_TEMP/AdaptiveCpp" -B "$RUNNER_TEMP/acpp-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/adaptivecpp" \
+            -DACPP_COMPILER_FEATURE_PROFILE=none
+          cmake --build "$RUNNER_TEMP/acpp-build" --parallel 2
+          cmake --install "$RUNNER_TEMP/acpp-build"
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
+          -DSYCLFFT_BUILD_HOST=OFF
+          -DSYCLFFT_BUILD_SYCL=ON
+          -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
+          -DSYCLFFT_CUFFT=OFF
+          -DSYCLFFT_BUILD_TESTS=ON
+      - run: cmake --build build
+      - run: ./build/tests/syclfft_sycl_tests
+      - run: cmake --install build --prefix "$PWD/install"
+      - name: Test installed SYCL target
+        run: >-
+          cmake -S test_package -B consumer -G Ninja
+          -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
+          -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
+          -DSYCLFFT_TEST_HOST=OFF
+          -DSYCLFFT_TEST_SYCL=ON
+          -DSYCLFFT_TEST_IMPLEMENTATION=AdaptiveCpp
+      - run: cmake --build consumer
+      - run: ./consumer/test_sycl
+
+  linux-dpcpp-cpu:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CPU OpenCL runtime
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          cmake ninja-build curl pocl-opencl-icd ocl-icd-libopencl1
+          libtbb12 libhwloc15 libzstd1
+      - uses: actions/cache@v4
+        id: cache-dpcpp
+        with:
+          path: ~/dpcpp
+          key: dpcpp-${{ runner.os }}-${{ env.DPCPP_VERSION }}
+      - name: Install open-source DPC++
+        if: steps.cache-dpcpp.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/dpcpp"
+          curl --fail --location --retry 3 \
+            "https://github.com/intel/llvm/releases/download/v${DPCPP_VERSION}/sycl_linux.tar.gz" \
+            --output "$RUNNER_TEMP/sycl_linux.tar.gz"
+          tar -xzf "$RUNNER_TEMP/sycl_linux.tar.gz" -C "$HOME/dpcpp"
+      - name: Export DPC++ environment
+        run: |
+          echo "$HOME/dpcpp/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/dpcpp/lib:$HOME/dpcpp/lib/x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER="$HOME/dpcpp/bin/clang"
+          -DCMAKE_CXX_COMPILER="$HOME/dpcpp/bin/clang++"
+          -DSYCLFFT_BUILD_HOST=OFF
+          -DSYCLFFT_BUILD_SYCL=ON
+          -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP
+          -DSYCLFFT_CUFFT=OFF
+          -DSYCLFFT_BUILD_TESTS=ON
+      - run: cmake --build build
+      - run: sycl-ls
+      - name: Run on PoCL CPU device
+        env:
+          ONEAPI_DEVICE_SELECTOR: opencl:cpu
+        run: ./build/tests/syclfft_sycl_tests
+
+  windows-dpcpp-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: cache-dpcpp
+        with:
+          path: ~/dpcpp
+          key: dpcpp-${{ runner.os }}-${{ env.DPCPP_VERSION }}
+      - name: Install open-source DPC++
+        if: steps.cache-dpcpp.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$HOME/dpcpp" | Out-Null
+          curl.exe --fail --location --retry 3 `
+            "https://github.com/intel/llvm/releases/download/v${env:DPCPP_VERSION}/sycl_windows.tar.gz" `
+            --output "$env:RUNNER_TEMP/sycl_windows.tar.gz"
+          tar -xzf "$env:RUNNER_TEMP/sycl_windows.tar.gz" -C "$HOME/dpcpp"
+      - name: Configure and build
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%USERPROFILE%\dpcpp\bin;%PATH%"
+          cmake -S . -B build -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER=%USERPROFILE%\dpcpp\bin\clang.exe ^
+            -DCMAKE_CXX_COMPILER=%USERPROFILE%\dpcpp\bin\clang++.exe ^
+            -DSYCLFFT_BUILD_HOST=OFF ^
+            -DSYCLFFT_BUILD_SYCL=ON ^
+            -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP ^
+            -DSYCLFFT_CUFFT=OFF ^
+            -DSYCLFFT_BUILD_TESTS=ON
+          cmake --build build
+
+  windows-adaptivecpp-cpu:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install AdaptiveCpp LLVM binary
+        shell: pwsh
+        run: |
+          $archive = "$env:RUNNER_TEMP/AdaptiveCpp-LLVM20-Win.zip"
+          $install = "$env:USERPROFILE/adaptivecpp"
+          Invoke-WebRequest `
+            "https://nightly.link/AdaptiveCpp/AdaptiveCpp/workflows/windows-acppllvm/develop/AdaptiveCpp-LLVM20-Win.zip" `
+            -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $install
+          "$install/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "ACPP_ROOT=$install" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER="$env:ACPP_ROOT/bin/clang.exe" `
+            -DCMAKE_CXX_COMPILER="$env:ACPP_ROOT/bin/clang.exe" `
+            -DAdaptiveCpp_DIR="$env:ACPP_ROOT/lib/cmake/AdaptiveCpp" `
+            -DACPP_TARGETS=omp `
+            -DSYCLFFT_BUILD_HOST=OFF `
+            -DSYCLFFT_BUILD_SYCL=ON `
+            -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp `
+            -DSYCLFFT_CUFFT=OFF `
+            -DSYCLFFT_BUILD_TESTS=ON
+      - run: cmake --build build
+      - run: acpp-info
+      - run: ./build/tests/syclfft_sycl_tests.exe
+
+  cuda-plugin-build:
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:12.6.3-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          ca-certificates cmake curl ninja-build libtbb12 libhwloc15 libzstd1
+      - name: Install open-source DPC++
+        run: |
+          mkdir -p /opt/dpcpp
+          curl --fail --location --retry 3 \
+            "https://github.com/intel/llvm/releases/download/v${DPCPP_VERSION}/sycl_linux.tar.gz" \
+            --output /tmp/sycl_linux.tar.gz
+          tar -xzf /tmp/sycl_linux.tar.gz -C /opt/dpcpp
+      - name: Configure cuFFT plugin
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=/opt/dpcpp/bin/clang
+          -DCMAKE_CXX_COMPILER=/opt/dpcpp/bin/clang++
+          -DSYCLFFT_BUILD_HOST=OFF
+          -DSYCLFFT_BUILD_SYCL=ON
+          -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP
+          -DSYCLFFT_CUFFT=ON
+          -DSYCLFFT_BUILD_TESTS=OFF
+      - run: cmake --build build
