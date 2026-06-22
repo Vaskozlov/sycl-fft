@@ -49,6 +49,13 @@ context. The portable provider never copies transform data to the host. This is
 also the OpenCL path in AdaptiveCpp: kernels operate directly on USM pointers,
 without exposing an OpenCL queue or using `cl_mem` buffers.
 
+The portable provider requires the `usm_device_allocations` aspect. PoCL does
+not currently expose device USM to Open DPC++, so the PoCL CI jobs verify that
+provider discovery reports a clear unavailable status and that plan creation
+fails safely. The Intel CPU OpenCL CI job executes the complete FFT test suite.
+AdaptiveCpp's OpenMP backend provides the portable CPU execution coverage on
+Linux, Windows, and macOS.
+
 The automatic selection order is:
 
 - CUDA queue: cuFFT, then portable SYCL;

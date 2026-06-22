@@ -133,7 +133,7 @@ jobs:
         if: matrix.opencl_runtime == 'intel'
         run: |
           curl --fail --location --retry 3 \
-            https://apt.repos.intel.com/oneapi/gpgkey \
+            https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
             --output "$RUNNER_TEMP/oneapi.asc"
           gpg --dearmor --yes \
             --output "$RUNNER_TEMP/oneapi-archive-keyring.gpg" \
@@ -175,7 +175,15 @@ jobs:
       - run: cmake --build build
       - run: clinfo -l
       - run: sycl-ls
-      - name: Run on OpenCL CPU device
+      - name: Verify graceful rejection without USM
+        if: matrix.opencl_runtime == 'pocl'
+        env:
+          ONEAPI_DEVICE_SELECTOR: opencl:cpu
+        run: >-
+          ./build/tests/syclfft_sycl_tests
+          --expect-portable-unavailable
+      - name: Run on Intel OpenCL CPU device
+        if: matrix.opencl_runtime == 'intel'
         env:
           ONEAPI_DEVICE_SELECTOR: opencl:cpu
         run: ./build/tests/syclfft_sycl_tests
@@ -215,7 +223,7 @@ jobs:
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set "DPCPP_ROOT=%USERPROFILE%\dpcpp\sycl_windows"
-          set "PATH=C:\pocl\bin;%DPCPP_ROOT%\bin;%PATH%"
+          set "PATH=%CD%\build;C:\pocl\bin;%DPCPP_ROOT%\bin;%PATH%"
           set "POCL_DEVICES=cpu"
           cmake -S . -B build -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
@@ -229,7 +237,7 @@ jobs:
           cmake --build build
           sycl-ls
           set "ONEAPI_DEVICE_SELECTOR=opencl:cpu"
-          build\tests\syclfft_sycl_tests.exe
+          build\tests\syclfft_sycl_tests.exe --expect-portable-unavailable
 
   windows-adaptivecpp-cpu:
     runs-on: windows-2022
@@ -250,7 +258,7 @@ jobs:
         shell: cmd
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          set "PATH=%ACPP_ROOT%\bin;%PATH%"
+          set "PATH=%CD%\build;%ACPP_ROOT%\bin;%PATH%"
           cmake -S . -B build -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER=%ACPP_ROOT%\bin\clang.exe ^

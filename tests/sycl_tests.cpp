@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -247,7 +248,7 @@ void run_1d(sycl::queue &queue, std::size_t count, syclfft::direction direction,
 
 } // namespace
 
-int main() try {
+int main(int argc, char **argv) try {
   static_assert(sizeof(syclfft::complex<float>) == 2 * sizeof(float));
   static_assert(alignof(syclfft::complex<float>) == alignof(float));
   static_assert(std::is_trivially_copyable_v<syclfft::complex<float>>);
@@ -269,6 +270,31 @@ int main() try {
         "SyclCPLX vendor complex layout mismatch");
 
   sycl::queue queue;
+  if (argc == 2 &&
+      std::string_view{argv[1]} == "--expect-portable-unavailable") {
+    const auto providers = syclfft::query_providers(queue);
+    const auto portable =
+        std::find_if(providers.begin(), providers.end(),
+                     [](const syclfft::provider_status &status) {
+                       return status.id == syclfft::provider::portable_sycl;
+                     });
+    check(portable != providers.end(), "portable provider status is missing");
+    check(portable->built, "portable provider was not built");
+    check(!portable->available,
+          "portable provider unexpectedly available on a non-USM runtime");
+    check(!portable->reason.empty(),
+          "unavailable portable provider has no diagnostic reason");
+    expect_error(syclfft::error_code::provider_unavailable, [&] {
+      (void)syclfft::plan_dft_1d<float>(
+          queue, 8, syclfft::direction::forward,
+          {.preferred_provider = syclfft::provider::portable_sycl});
+    });
+    std::cout << "Portable provider correctly unavailable on "
+              << queue.get_device().get_info<sycl::info::device::name>()
+              << ": " << portable->reason << '\n';
+    return 0;
+  }
+  check(argc == 1, "unknown test argument");
   for (auto normalization :
        {syclfft::normalization::none, syclfft::normalization::forward,
         syclfft::normalization::backward, syclfft::normalization::orthogonal}) {
