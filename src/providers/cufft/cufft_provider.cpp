@@ -147,7 +147,7 @@ namespace
             const auto cufft_handle = handle_;
             const bool dp = double_precision_;
             std::vector<sycl::event> deps(dependencies.begin(), dependencies.end());
-            return queue_.submit([&deps](sycl::handler &command_group) {
+            return queue_.submit([&](sycl::handler &command_group) {
                 command_group.depends_on(deps);
                 command_group.ext_codeplay_enqueue_native_command(
                     [=](sycl::interop_handle interop) {
