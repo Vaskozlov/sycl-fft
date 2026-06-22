@@ -118,15 +118,17 @@ namespace
             const int fft_direction =
                 direction_ == syclfft::direction::forward ? CUFFT_FORWARD : CUFFT_INVERSE;
 #if defined(SYCLFFT_USE_ADAPTIVECPP)
+            const auto cufft_handle = handle_;
+            const bool dp = double_precision_;
             std::vector<sycl::event> deps(dependencies.begin(), dependencies.end());
             return queue_.AdaptiveCpp_enqueue_custom_operation(
-                [=, this](sycl::interop_handle &handle) {
-                auto stream = handle.get_native_queue<sycl::backend::cuda>();
-                check(cufftSetStream(handle_, stream), "cufftSetStream");
-                if (double_precision_) {
+                [=](sycl::interop_handle &interop) {
+                auto stream = interop.get_native_queue<sycl::backend::cuda>();
+                check(cufftSetStream(cufft_handle, stream), "cufftSetStream");
+                if (dp) {
                     check(
                         cufftExecZ2Z(
-                            handle_,
+                            cufft_handle,
                             reinterpret_cast<cufftDoubleComplex *>(const_cast<void *>(input)),
                             reinterpret_cast<cufftDoubleComplex *>(output),
                             fft_direction),
@@ -134,7 +136,7 @@ namespace
                 } else {
                     check(
                         cufftExecC2C(
-                            handle_,
+                            cufft_handle,
                             reinterpret_cast<cufftComplex *>(const_cast<void *>(input)),
                             reinterpret_cast<cufftComplex *>(output),
                             fft_direction),
@@ -142,17 +144,19 @@ namespace
                 }
             }, deps);
 #else
+            const auto cufft_handle = handle_;
+            const bool dp = double_precision_;
             std::vector<sycl::event> deps(dependencies.begin(), dependencies.end());
-            return queue_.submit([&](sycl::handler &command_group) {
+            return queue_.submit([&deps](sycl::handler &command_group) {
                 command_group.depends_on(deps);
                 command_group.ext_codeplay_enqueue_native_command(
-                    [=, this](sycl::interop_handle handle) {
-                    auto stream = handle.get_native_queue<sycl::backend::ext_oneapi_cuda>();
-                    check(cufftSetStream(handle_, stream), "cufftSetStream");
-                    if (double_precision_) {
+                    [=](sycl::interop_handle interop) {
+                    auto stream = interop.get_native_queue<sycl::backend::ext_oneapi_cuda>();
+                    check(cufftSetStream(cufft_handle, stream), "cufftSetStream");
+                    if (dp) {
                         check(
                             cufftExecZ2Z(
-                                handle_,
+                                cufft_handle,
                                 reinterpret_cast<cufftDoubleComplex *>(const_cast<void *>(input)),
                                 reinterpret_cast<cufftDoubleComplex *>(output),
                                 fft_direction),
@@ -160,7 +164,7 @@ namespace
                     } else {
                         check(
                             cufftExecC2C(
-                                handle_,
+                                cufft_handle,
                                 reinterpret_cast<cufftComplex *>(const_cast<void *>(input)),
                                 reinterpret_cast<cufftComplex *>(output),
                                 fft_direction),
