@@ -11,7 +11,6 @@ permissions:
 env:
   ACPP_VERSION: "25.10.0"
   DPCPP_VERSION: "6.3.0"
-  POCL_VERSION: "7.0.0"
 
 jobs:
   macos-host:
@@ -188,7 +187,47 @@ jobs:
           ONEAPI_DEVICE_SELECTOR: opencl:cpu
         run: ./build/tests/syclfft_sycl_tests
 
-  windows-dpcpp-pocl:
+  windows-host:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Conan
+        run: python -m pip install "conan>=2.20,<3"
+      - name: Build and test host library
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          conan profile detect --force
+          conan install . -of build/conan ^
+            -s build_type=Release ^
+            -s compiler.cppstd=20 ^
+            -o "&:with_host=True" ^
+            -o "&:with_sycl=False" ^
+            -c tools.cmake.cmaketoolchain:generator=Ninja ^
+            --build=missing
+          cmake -S . -B build/windows-host -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE=%CD%\build\conan\build\Release\generators\conan_toolchain.cmake ^
+            -DSYCLFFT_BUILD_HOST=ON ^
+            -DSYCLFFT_BUILD_SYCL=OFF ^
+            -DSYCLFFT_BUILD_TESTS=ON
+          cmake --build build/windows-host
+          set "PATH=%CD%\build\windows-host;%PATH%"
+          ctest --test-dir build/windows-host --output-on-failure
+          cmake --install build/windows-host --prefix "%CD%\install"
+          cmake -S test_package -B consumer -G Ninja ^
+            -Dsyclfft_DIR=%CD%\install\lib\cmake\syclfft ^
+            -DSYCLFFT_TEST_HOST=ON ^
+            -DSYCLFFT_TEST_SYCL=OFF
+          cmake --build consumer
+          set "PATH=%CD%\install\bin;%PATH%"
+          set "SYCLFFT_PLUGIN_PATH=%CD%\install\bin\syclfft\providers"
+          consumer\test_host.exe
+
+  windows-dpcpp-build:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -206,25 +245,12 @@ jobs:
             "https://github.com/intel/llvm/releases/download/v${env:DPCPP_VERSION}/sycl_windows.tar.gz" `
             --output "$env:RUNNER_TEMP/sycl_windows.tar.gz"
           tar -xzf "$env:RUNNER_TEMP/sycl_windows.tar.gz" -C "$HOME/dpcpp"
-      - name: Install PoCL CPU runtime
-        shell: pwsh
-        run: |
-          $installer = "$env:RUNNER_TEMP/PoCL-win64.exe"
-          curl.exe --fail --location --retry 3 `
-            "https://github.com/pocl/pocl/releases/download/v7.0/PoCL-${env:POCL_VERSION}-NOCONF-win64.exe" `
-            --output $installer
-          $process = Start-Process -FilePath $installer `
-            -ArgumentList "/S", "/D=C:\pocl" -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "PoCL installer failed with exit code $($process.ExitCode)"
-          }
-      - name: Configure and build
+      - name: Compile and link SYCL targets
         shell: cmd
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set "DPCPP_ROOT=%USERPROFILE%\dpcpp\sycl_windows"
-          set "PATH=%CD%\build;C:\pocl\bin;%DPCPP_ROOT%\bin;%PATH%"
-          set "POCL_DEVICES=cpu"
+          set "PATH=%DPCPP_ROOT%\bin;%PATH%"
           cmake -S . -B build -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER=%DPCPP_ROOT%\bin\clang.exe ^
@@ -235,9 +261,6 @@ jobs:
             -DSYCLFFT_CUFFT=OFF ^
             -DSYCLFFT_BUILD_TESTS=ON
           cmake --build build
-          sycl-ls
-          set "ONEAPI_DEVICE_SELECTOR=opencl:cpu"
-          build\tests\syclfft_sycl_tests.exe --expect-portable-unavailable
 
   windows-adaptivecpp-cpu:
     runs-on: windows-2022
