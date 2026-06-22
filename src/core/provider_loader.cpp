@@ -154,7 +154,7 @@ namespace syclfft::detail
                 error_code::plugin_error,
                 "Provider '" + provider_file + "' has an incompatible ABI");
         }
-        return {.api = api, .module = std::move(loaded.module)};
+        return loaded_host_provider{api, std::move(loaded.module)};
     }
 
     loaded_provider_symbol
@@ -193,7 +193,7 @@ namespace syclfft::detail
                 errors += path.string() + ": entry point '" + symbol_name + "' missing; ";
                 continue;
             }
-            return {.symbol = symbol, .module = std::move(module)};
+            return loaded_provider_symbol{symbol, std::move(module)};
         }
         throw exception(
             error_code::provider_unavailable,

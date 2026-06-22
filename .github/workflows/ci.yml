@@ -22,6 +22,7 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DSYCLFFT_BUILD_SYCL=OFF
           -DSYCLFFT_USE_SYSTEM_FFTW=ON
           -DSYCLFFT_BUILD_TESTS=ON
@@ -31,6 +32,7 @@ jobs:
       - name: Test installed host target
         run: >-
           cmake -S test_package -B consumer -G Ninja
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
           -DSYCLFFT_TEST_HOST=ON
           -DSYCLFFT_TEST_SYCL=OFF
@@ -46,6 +48,7 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang"
           -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"
           -DAdaptiveCpp_DIR="$(brew --prefix adaptivecpp)/lib/cmake/AdaptiveCpp"
@@ -89,6 +92,7 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER=clang
           -DCMAKE_CXX_COMPILER=clang++
           -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
@@ -104,6 +108,7 @@ jobs:
       - name: Test installed SYCL target
         run: >-
           cmake -S test_package -B consumer -G Ninja
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
           -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
           -DSYCLFFT_TEST_HOST=OFF
@@ -164,6 +169,7 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER="$HOME/dpcpp/bin/clang"
           -DCMAKE_CXX_COMPILER="$HOME/dpcpp/bin/clang++"
           -DSYCLFFT_BUILD_HOST=OFF
@@ -203,7 +209,7 @@ jobs:
           conan profile detect --force
           conan install . -of build/conan ^
             -s build_type=Release ^
-            -s compiler.cppstd=20 ^
+            -s compiler.cppstd=17 ^
             -o "&:with_host=True" ^
             -o "&:with_sycl=False" ^
             -c tools.cmake.cmaketoolchain:generator=Ninja ^
@@ -317,6 +323,7 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER=/opt/dpcpp/bin/clang
           -DCMAKE_CXX_COMPILER=/opt/dpcpp/bin/clang++
           -DSYCLFFT_BUILD_HOST=OFF

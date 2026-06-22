@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <syclfft/span.hpp>
 #include <vector>
 
 #if defined(_WIN32)
@@ -115,6 +116,15 @@ namespace syclfft
         SYCLFFT_CORE_EXPORT double
             normalization_scale(normalization mode, direction dir, std::size_t transform_size);
         SYCLFFT_CORE_EXPORT const char *provider_name(provider value) noexcept;
+
+        inline std::size_t transform_size(syclfft::span<const std::size_t> shape)
+        {
+            std::size_t result = 1;
+            for (const auto length : shape) {
+                result *= length;
+            }
+            return result;
+        }
     } // namespace detail
 
 } // namespace syclfft

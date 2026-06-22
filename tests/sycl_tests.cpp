@@ -1,14 +1,16 @@
+#include "test_utils.hpp"
+
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <complex>
+#include <cstring>
 #include <iostream>
 #include <memory>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <syclfft/span.hpp>
 #include <syclfft/syclfft.hpp>
 #include <type_traits>
 #include <vector>
@@ -16,11 +18,18 @@
 namespace
 {
 
-    void check(bool condition, const std::string &message)
+    /* C++17 replacement for std::bit_cast (C++20) */
+    template <class To, class From>
+    To portability_bit_cast(const From &src) noexcept
     {
-        if (!condition) {
-            throw std::runtime_error(message);
-        }
+        static_assert(sizeof(To) == sizeof(From), "bit_cast size mismatch");
+        static_assert(
+            std::is_trivially_copyable<From>::value, "bit_cast requires trivially copyable");
+        static_assert(
+            std::is_trivially_copyable<To>::value, "bit_cast requires trivially copyable");
+        To dst{};
+        std::memcpy(&dst, &src, sizeof(To));
+        return dst;
     }
 
     template <class T>
@@ -59,9 +68,9 @@ namespace
             return pointer_;
         }
 
-        void write(std::span<const T> values)
+        void write(syclfft::span<const T> values)
         {
-            check(values.size() == count_, "USM upload size mismatch");
+            test_utils::check(values.size() == count_, "USM upload size mismatch");
             queue_->memcpy(pointer_, values.data(), count_ * sizeof(T)).wait_and_throw();
         }
 
@@ -104,7 +113,7 @@ namespace
 
     template <class Scalar>
     std::vector<std::complex<Scalar>> reference_many(
-        std::vector<std::complex<Scalar>> values, std::span<const std::size_t> shape,
+        std::vector<std::complex<Scalar>> values, syclfft::span<const std::size_t> shape,
         std::size_t batch_count, syclfft::direction direction)
     {
         std::size_t transform_size = 1;
@@ -168,28 +177,19 @@ namespace
             shape,
             batch_count,
             syclfft::direction::forward,
-            {.preferred_provider = syclfft::provider::portable_sycl});
+            test_utils::make_plan_options(
+                syclfft::placement::out_of_place,
+                syclfft::normalization::none,
+                syclfft::provider::portable_sycl));
         fft.execute(input.get(), output.get()).wait_and_throw();
         const auto actual_values = output.read();
         const auto tolerance = std::is_same_v<Scalar, float> ? Scalar{8e-4} : Scalar{5e-11};
         for (std::size_t i = 0; i < count; ++i) {
             const std::complex<Scalar> actual{actual_values[i].real(), actual_values[i].imag()};
-            check(
+            test_utils::check(
                 std::abs(actual - expected[i]) <= tolerance * (Scalar{1} + std::abs(expected[i])),
                 "multidimensional or batch mismatch at element " + std::to_string(i));
         }
-    }
-
-    template <class Function>
-    void expect_error(syclfft::error_code code, Function &&function)
-    {
-        try {
-            function();
-        } catch (const syclfft::exception &ex) {
-            check(ex.code() == code, "wrong exception code");
-            return;
-        }
-        throw std::runtime_error("expected syclfft::exception");
     }
 
     template <class Scalar>
@@ -222,9 +222,8 @@ namespace
             queue,
             count,
             direction,
-            {.placement = placement,
-             .normalization = normalization,
-             .preferred_provider = syclfft::provider::portable_sycl});
+            test_utils::make_plan_options(
+                placement, normalization, syclfft::provider::portable_sycl));
         auto dependency = queue.submit([&](sycl::handler &handler) { handler.single_task([] {}); });
         auto event = placement == syclfft::placement::in_place
                          ? fft.execute(input.get(), dependency)
@@ -249,15 +248,15 @@ namespace
             if (repeated_output) {
                 const std::complex<Scalar> repeated_actual{
                     repeated_values[i].real(), repeated_values[i].imag()};
-                check(
+                test_utils::check(
                     std::abs(repeated_actual - expected[i])
                         <= tolerance * (Scalar{1} + std::abs(expected[i])),
                     "serialized repeated execution mismatch");
             }
         }
-        check(
+        test_utils::check(
             fft.selected_provider() == syclfft::provider::portable_sycl, "wrong portable provider");
-        check(
+        test_utils::check(
             fft.scratch_size_bytes() >= 2 * count * sizeof(syclfft::complex<Scalar>),
             "portable scratch size is too small");
     }
@@ -281,9 +280,9 @@ try {
     const std::complex<float> host_value{2.5f, -1.25f};
     const syclfft::complex<float> sycl_value{host_value};
     const std::complex<float> converted = sycl_value;
-    check(converted == host_value, "SyclCPLX std::complex conversion failed");
-    const auto native_value = std::bit_cast<native_complex_float>(sycl_value);
-    check(
+    test_utils::check(converted == host_value, "SyclCPLX std::complex conversion failed");
+    const auto native_value = portability_bit_cast<native_complex_float>(sycl_value);
+    test_utils::check(
         native_value.real == host_value.real() && native_value.imag == host_value.imag(),
         "SyclCPLX vendor complex layout mismatch");
 
@@ -294,24 +293,28 @@ try {
             providers.begin(), providers.end(), [](const syclfft::provider_status &status) {
             return status.id == syclfft::provider::portable_sycl;
         });
-        check(portable != providers.end(), "portable provider status is missing");
-        check(portable->built, "portable provider was not built");
-        check(
+        test_utils::check(portable != providers.end(), "portable provider status is missing");
+        test_utils::check(portable->built, "portable provider was not built");
+        test_utils::check(
             !portable->available, "portable provider unexpectedly available on a non-USM runtime");
-        check(!portable->reason.empty(), "unavailable portable provider has no diagnostic reason");
-        expect_error(syclfft::error_code::provider_unavailable, [&] {
+        test_utils::check(
+            !portable->reason.empty(), "unavailable portable provider has no diagnostic reason");
+        test_utils::expect_error(syclfft::error_code::provider_unavailable, [&] {
             (void)syclfft::plan_dft_1d<float>(
                 queue,
                 8,
                 syclfft::direction::forward,
-                {.preferred_provider = syclfft::provider::portable_sycl});
+                test_utils::make_plan_options(
+                    syclfft::placement::out_of_place,
+                    syclfft::normalization::none,
+                    syclfft::provider::portable_sycl));
         });
         std::cout << "Portable provider correctly unavailable on "
                   << queue.get_device().get_info<sycl::info::device::name>() << ": "
                   << portable->reason << '\n';
         return 0;
     }
-    check(argc == 1, "unknown test argument");
+    test_utils::check(argc == 1, "unknown test argument");
     for (auto normalization :
          {syclfft::normalization::none,
           syclfft::normalization::forward,
@@ -361,7 +364,7 @@ try {
             syclfft::normalization::orthogonal,
             syclfft::placement::out_of_place);
     } else {
-        expect_error(syclfft::error_code::unsupported_precision, [&] {
+        test_utils::expect_error(syclfft::error_code::unsupported_precision, [&] {
             (void)syclfft::plan_dft_1d<double>(queue, 8, syclfft::direction::forward);
         });
     }
@@ -380,12 +383,13 @@ try {
             queue,
             13,
             syclfft::direction::backward,
-            {.normalization = syclfft::normalization::backward});
+            test_utils::make_plan_options(
+                syclfft::placement::out_of_place, syclfft::normalization::backward));
         const auto forward_done = forward.execute(input.get(), spectrum.get());
         backward.execute(spectrum.get(), restored.get(), forward_done).wait_and_throw();
         const auto actual = restored.read();
         for (std::size_t i = 0; i < 13; ++i) {
-            check(
+            test_utils::check(
                 std::abs(
                     static_cast<std::complex<float>>(actual[i])
                     - static_cast<std::complex<float>>(source[i]))
@@ -395,10 +399,11 @@ try {
     }
 
     const auto providers = syclfft::query_providers(queue);
-    check(!providers.empty() && providers.front().available, "portable provider unavailable");
+    test_utils::check(
+        !providers.empty() && providers.front().available, "portable provider unavailable");
     {
         auto automatic = syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
-        check(
+        test_utils::check(
             automatic.selected_provider() == syclfft::provider::portable_sycl,
             "automatic CPU selection did not safely fall back to portable SYCL");
     }
@@ -423,7 +428,7 @@ try {
         second_done.wait_and_throw();
         const auto actual_a = output_a.read();
         const auto actual_b = output_b.read();
-        check(
+        test_utils::check(
             std::abs(actual_a[0].real() - 1.0f) < 1e-5f
                 && std::abs(actual_b[0].real() - 1.0f) < 1e-5f,
             "concurrent plan execution failed");
@@ -436,7 +441,7 @@ try {
         usm_buffer<syclfft::complex<float>> output(8, queue);
         if (sycl::get_pointer_type(foreign_input.get(), queue.get_context())
             == sycl::usm::alloc::unknown) {
-            expect_error(syclfft::error_code::invalid_pointer, [&] {
+            test_utils::expect_error(syclfft::error_code::invalid_pointer, [&] {
                 auto fft = syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
                 fft.execute(foreign_input.get(), output.get());
             });
@@ -459,11 +464,17 @@ try {
         usm_buffer<syclfft::complex<float>> output(8, queue, true);
         input.write(device_source);
         auto fft = syclfft::plan_dft_1d<float>(
-            queue, 8, syclfft::direction::forward, {.preferred_provider = syclfft::provider::fftw});
+            queue,
+            8,
+            syclfft::direction::forward,
+            test_utils::make_plan_options(
+                syclfft::placement::out_of_place,
+                syclfft::normalization::none,
+                syclfft::provider::fftw));
         fft.execute(input.get(), output.get()).wait_and_throw();
         const auto actual = output.read();
         for (std::size_t i = 0; i < 8; ++i) {
-            check(
+            test_utils::check(
                 std::abs(static_cast<std::complex<float>>(actual[i]) - expected[i]) < 1e-4f,
                 "explicit FFTW SYCL path mismatch");
         }
@@ -484,38 +495,41 @@ try {
         });
         const std::array dependencies{first_half, second_half};
         auto fft = syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
-        fft.execute(input.get(), output.get(), std::span<const sycl::event>{dependencies})
+        fft.execute(input.get(), output.get(), syclfft::span<const sycl::event>{dependencies})
             .wait_and_throw();
         const auto actual = output.read();
         for (std::size_t i = 0; i < 8; ++i) {
-            check(
+            test_utils::check(
                 std::abs(actual[i].real() - 1.0f) < 1e-5f && std::abs(actual[i].imag()) < 1e-5f,
                 "event-span dependency ordering failed");
         }
     }
 
-    expect_error(syclfft::error_code::provider_unavailable, [&] {
+    test_utils::expect_error(syclfft::error_code::provider_unavailable, [&] {
         (void)syclfft::plan_dft_1d<float>(
             queue,
             8,
             syclfft::direction::forward,
-            {.preferred_provider = syclfft::provider::cufft});
+            test_utils::make_plan_options(
+                syclfft::placement::out_of_place,
+                syclfft::normalization::none,
+                syclfft::provider::cufft));
     });
-    expect_error(syclfft::error_code::invalid_argument, [&] {
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [&] {
         (void)syclfft::plan_dft_1d<float>(queue, 8, static_cast<syclfft::direction>(0));
     });
-    expect_error(syclfft::error_code::invalid_pointer, [&] {
+    test_utils::expect_error(syclfft::error_code::invalid_pointer, [&] {
         auto fft = syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward);
         fft.execute(nullptr, nullptr);
     });
-    expect_error(syclfft::error_code::invalid_argument, [&] {
-        auto fft = syclfft::plan_dft_1d<float>(
-            queue, 8, syclfft::direction::forward, {.placement = syclfft::placement::in_place});
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [&] {
+        const auto options = test_utils::make_plan_options(syclfft::placement::in_place);
+        auto fft = syclfft::plan_dft_1d<float>(queue, 8, syclfft::direction::forward, options);
         usm_buffer<syclfft::complex<float>> input(8, queue);
         usm_buffer<syclfft::complex<float>> output(8, queue);
         fft.execute(input.get(), output.get());
     });
-    expect_error(syclfft::error_code::invalid_state, [&] {
+    test_utils::expect_error(syclfft::error_code::invalid_state, [&] {
         auto original = syclfft::plan_dft_1d<float>(queue, 4, syclfft::direction::forward);
         auto moved = std::move(original);
         (void)moved;

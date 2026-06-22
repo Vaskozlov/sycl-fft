@@ -28,7 +28,7 @@ if(NOT BUILD_SHARED_LIBS)
   message(FATAL_ERROR "syclfft v0.1 supports shared core libraries and provider modules only")
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -43,7 +43,7 @@ target_include_directories(syclfft_core
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_definitions(syclfft_core PRIVATE SYCLFFT_BUILDING_CORE)
-target_compile_features(syclfft_core PUBLIC cxx_std_20)
+target_compile_features(syclfft_core PUBLIC cxx_std_17)
 set_target_properties(syclfft_core PROPERTIES
   EXPORT_NAME core
   VERSION ${PROJECT_VERSION}
@@ -73,7 +73,7 @@ if(SYCLFFT_BUILD_HOST)
   add_library(syclfft_host SHARED src/host/host.cpp)
   add_library(syclfft::host ALIAS syclfft_host)
   target_link_libraries(syclfft_host PUBLIC syclfft_core)
-  target_compile_features(syclfft_host PUBLIC cxx_std_20)
+  target_compile_features(syclfft_host PUBLIC cxx_std_17)
   target_compile_definitions(syclfft_host PRIVATE SYCLFFT_BUILDING_HOST)
   set_target_properties(syclfft_host PROPERTIES
     EXPORT_NAME host
@@ -99,7 +99,7 @@ if(SYCLFFT_BUILD_SYCL)
   add_library(syclfft_sycl SHARED src/sycl/sycl.cpp)
   add_library(syclfft::sycl ALIAS syclfft_sycl)
   target_link_libraries(syclfft_sycl PUBLIC syclfft_core)
-  target_compile_features(syclfft_sycl PUBLIC cxx_std_20)
+  target_compile_features(syclfft_sycl PUBLIC cxx_std_17)
   target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_BUILDING_SYCL)
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/syclfft/detail")
   configure_file(third_party/syclcplx/sycl_ext_complex.hpp

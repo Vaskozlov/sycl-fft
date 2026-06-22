@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
-#include <span>
 #include <syclfft/common.hpp>
 #include <type_traits>
 #include <vector>
@@ -32,7 +31,7 @@ namespace syclfft::host
         void execute(complex_type *inout);
         void execute(const complex_type *input, complex_type *output);
 
-        [[nodiscard]] std::span<const std::size_t> shape() const noexcept;
+        [[nodiscard]] syclfft::span<const std::size_t> shape() const noexcept;
         [[nodiscard]] std::size_t batch_count() const noexcept;
         [[nodiscard]] syclfft::direction direction() const noexcept;
         [[nodiscard]] syclfft::provider selected_provider() const noexcept;
@@ -49,8 +48,8 @@ namespace syclfft::host
 
     template <class Scalar>
     plan<Scalar> plan_many_dft(
-        std::span<const std::size_t> lengths, std::size_t batch_count, syclfft::direction direction,
-        plan_options options = {})
+        syclfft::span<const std::size_t> lengths, std::size_t batch_count,
+        syclfft::direction direction, plan_options options = {})
     {
         return plan<Scalar>({lengths.begin(), lengths.end()}, batch_count, direction, options);
     }

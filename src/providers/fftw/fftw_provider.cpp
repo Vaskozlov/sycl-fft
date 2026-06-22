@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <syclfft/detail/provider_abi.h>
+#include <syclfft/detail/provider_error_buffer.hpp>
 #include <type_traits>
 #include <vector>
 
@@ -19,16 +20,6 @@ namespace
     {
         static std::mutex mutex;
         return mutex;
-    }
-
-    void set_error(char *output, size_t capacity, const std::string &message)
-    {
-        if (!output || capacity == 0) {
-            return;
-        }
-        const auto count = std::min(capacity - 1, message.size());
-        std::memcpy(output, message.data(), count);
-        output[count] = '\0';
     }
 
     template <class Scalar>
@@ -142,8 +133,8 @@ namespace
     class fftw_plan_holder
     {
         using traits = fftw_traits<Scalar>;
-        using native_plan = traits::plan_type;
-        using native_complex = traits::complex_type;
+        using native_plan = typename traits::plan_type;
+        using native_complex = typename traits::complex_type;
 
     public:
         explicit fftw_plan_holder(const syclfft_host_plan_config_v1 &config)
@@ -325,7 +316,7 @@ namespace
             }
             throw std::runtime_error("Unsupported FFTW scalar type");
         } catch (const std::exception &ex) {
-            set_error(error, capacity, ex.what());
+            syclfft::detail::set_error_buffer(error, capacity, ex.what());
             return nullptr;
         }
     }
@@ -344,17 +335,17 @@ namespace
             static_cast<erased_plan *>(plan)->execute(input, output);
             return 0;
         } catch (const std::exception &ex) {
-            set_error(error, capacity, ex.what());
+            syclfft::detail::set_error_buffer(error, capacity, ex.what());
             return 1;
         }
     }
 
     const syclfft_host_provider_v1 provider_api{
-        .abi_version = SYCLFFT_PROVIDER_ABI_VERSION,
-        .name = "fftw",
-        .create = &create_plan,
-        .destroy = &destroy_plan,
-        .execute = &execute_plan,
+        SYCLFFT_PROVIDER_ABI_VERSION,
+        "fftw",
+        &create_plan,
+        &destroy_plan,
+        &execute_plan,
     };
 
 } // namespace

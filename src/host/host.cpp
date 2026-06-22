@@ -31,15 +31,6 @@ namespace syclfft::host
             throw exception(error_code::invalid_argument, "Invalid FFT direction");
         }
 
-        std::size_t transform_size(const std::vector<std::size_t> &shape)
-        {
-            std::size_t result = 1;
-            for (const auto length : shape) {
-                result *= length;
-            }
-            return result;
-        }
-
     } // namespace
 
     template <class Scalar>
@@ -64,16 +55,15 @@ namespace syclfft::host
             api_ = loaded.api;
             module_ = std::move(loaded.module);
 
-            syclfft_host_plan_config_v1 config{
-                .abi_version = SYCLFFT_PROVIDER_ABI_VERSION,
-                .scalar = scalar_id<Scalar>(),
-                .direction = direction_id(direction_),
-                .rank = static_cast<std::uint32_t>(lengths_.size()),
-                .lengths = {},
-                .batch_count = static_cast<std::uint64_t>(batch_count_),
-                .in_place = static_cast<std::uint32_t>(options_.placement == placement::in_place),
-                .measure = static_cast<std::uint32_t>(options_.planning == planning_mode::measure),
-            };
+            syclfft_host_plan_config_v1 config{};
+            config.abi_version = SYCLFFT_PROVIDER_ABI_VERSION;
+            config.scalar = scalar_id<Scalar>();
+            config.direction = direction_id(direction_);
+            config.rank = static_cast<std::uint32_t>(lengths_.size());
+            config.batch_count = static_cast<std::uint64_t>(batch_count_);
+            config.in_place = static_cast<std::uint32_t>(options_.placement == placement::in_place);
+            config.measure =
+                static_cast<std::uint32_t>(options_.planning == planning_mode::measure);
             for (std::size_t i = 0; i < lengths_.size(); ++i) {
                 config.lengths[i] = static_cast<std::uint64_t>(lengths_[i]);
             }
@@ -133,7 +123,7 @@ namespace syclfft::host
             }
 
             const auto scale = static_cast<Scalar>(detail::normalization_scale(
-                options_.normalization, direction_, transform_size(lengths_)));
+                options_.normalization, direction_, detail::transform_size(lengths_)));
             if (scale != Scalar{1}) {
                 for (std::size_t i = 0; i < element_count_; ++i) {
                     output[i] *= scale;
@@ -185,10 +175,10 @@ namespace syclfft::host
     }
 
     template <class Scalar>
-    std::span<const std::size_t> plan<Scalar>::shape() const noexcept
+    syclfft::span<const std::size_t> plan<Scalar>::shape() const noexcept
     {
-        return impl_ ? std::span<const std::size_t>{impl_->lengths_}
-                     : std::span<const std::size_t>{};
+        return impl_ ? syclfft::span<const std::size_t>{impl_->lengths_}
+                     : syclfft::span<const std::size_t>{};
     }
 
     template <class Scalar>

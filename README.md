@@ -1,6 +1,6 @@
 # syclfft
 
-`syclfft` is a C++20 C2C FFT library with FFTW-style reusable RAII plans and a
+`syclfft` is a C++17 C2C FFT library with FFTW-style reusable RAII plans and a
 unified USM interface for SYCL. Plans are direction-specific and
 pointer-independent; execution returns native `sycl::event` objects.
 
@@ -28,21 +28,23 @@ sycl::queue queue;
 auto* input = sycl::malloc_shared<syclfft::complex<float>>(1024, queue);
 auto* output = sycl::malloc_shared<syclfft::complex<float>>(1024, queue);
 
+syclfft::plan_options options;
+options.placement = syclfft::placement::out_of_place;
+options.normalization = syclfft::normalization::none;
+options.preferred_provider = syclfft::provider::automatic;
+
 auto fft = syclfft::plan_dft_1d<float>(
-    queue, 1024, syclfft::direction::forward,
-    {
-        .placement = syclfft::placement::out_of_place,
-        .normalization = syclfft::normalization::none,
-        .preferred_provider = syclfft::provider::automatic,
-    });
+    queue, 1024, syclfft::direction::forward, options);
 
 sycl::event done = fft.execute(input, output);
 done.wait_and_throw();
 ```
 
-`execute` also accepts one dependency event or a `std::span` of events. A plan
-serializes executions which share its internal scratch. Create multiple plans
-when transforms must run concurrently.
+`execute` also accepts one dependency event or a C++17-compatible
+`syclfft::span<const sycl::event>` of events. Arrays and contiguous containers
+convert to `syclfft::span` without copying. A plan serializes executions which
+share its internal scratch. Create multiple plans when transforms must run
+concurrently.
 
 All device pointers must be USM allocations belonging to the plan queue's
 context. The portable provider never copies transform data to the host. This is
@@ -73,9 +75,10 @@ runtime state with `syclfft::query_providers(queue)`.
 #include <syclfft/host.hpp>
 
 std::vector<std::complex<double>> input(256), output(256);
+syclfft::plan_options options;
+options.placement = syclfft::placement::out_of_place;
 auto fft = syclfft::host::plan_dft_1d<double>(
-    256, syclfft::direction::forward,
-    {.placement = syclfft::placement::out_of_place});
+    256, syclfft::direction::forward, options);
 fft.execute(input.data(), output.data());
 ```
 
@@ -104,11 +107,11 @@ zero-copy USM path.
 
 ## Conan 2
 
-Use a profile with C++20 enabled:
+Use a profile with C++17 enabled:
 
 ```sh
 conan install . -of build/conan -s build_type=Release \
-  -s compiler.cppstd=20 --build=missing
+  -s compiler.cppstd=17 --build=missing
 cmake --preset conan-release
 cmake --build --preset conan-release
 ctest --test-dir build/conan/build/Release --output-on-failure

@@ -1,34 +1,26 @@
+#include "test_utils.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
 #include <iostream>
 #include <limits>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <syclfft/host.hpp>
+#include <syclfft/span.hpp>
 #include <vector>
 
 namespace
 {
 
-    void check(bool condition, const std::string &message)
-    {
-        if (!condition) {
-            throw std::runtime_error(message);
-        }
-    }
-
     template <class Scalar>
     std::vector<std::complex<Scalar>> reference_axis(
-        const std::vector<std::complex<Scalar>> &input, std::span<const std::size_t> shape,
+        const std::vector<std::complex<Scalar>> &input, syclfft::span<const std::size_t> shape,
         std::size_t batch_count, std::size_t axis, syclfft::direction direction)
     {
         auto output = input;
-        std::size_t transform_size = 1;
-        for (auto n : shape) {
-            transform_size *= n;
-        }
+        const std::size_t transform_size = syclfft::detail::transform_size(shape);
         std::size_t stride = 1;
         for (std::size_t i = axis + 1; i < shape.size(); ++i) {
             stride *= shape[i];
@@ -56,7 +48,7 @@ namespace
 
     template <class Scalar>
     std::vector<std::complex<Scalar>> reference(
-        std::vector<std::complex<Scalar>> values, std::span<const std::size_t> shape,
+        std::vector<std::complex<Scalar>> values, syclfft::span<const std::size_t> shape,
         std::size_t batch_count, syclfft::direction direction, syclfft::normalization normalization)
     {
         for (std::size_t axis = 0; axis < shape.size(); ++axis) {
@@ -79,7 +71,7 @@ namespace
         const std::vector<std::complex<Scalar>> &expected, Scalar tolerance,
         const std::string &label)
     {
-        check(actual.size() == expected.size(), label + ": size mismatch");
+        test_utils::check(actual.size() == expected.size(), label + ": size mismatch");
         for (std::size_t i = 0; i < actual.size(); ++i) {
             const auto error = std::abs(actual[i] - expected[i]);
             const auto bound = tolerance * (Scalar{1} + std::abs(expected[i]));
@@ -109,12 +101,12 @@ namespace
             shape,
             batches,
             direction,
-            {.placement = placement,
-             .normalization = normalization,
-             .preferred_provider = syclfft::provider::fftw});
-        check(fft.selected_provider() == syclfft::provider::fftw, "wrong host provider");
-        check(std::equal(fft.shape().begin(), fft.shape().end(), shape.begin()), "wrong shape");
-        check(fft.batch_count() == batches, "wrong batch count");
+            test_utils::make_plan_options(placement, normalization, syclfft::provider::fftw));
+        test_utils::check(
+            fft.selected_provider() == syclfft::provider::fftw, "wrong host provider");
+        test_utils::check(
+            std::equal(fft.shape().begin(), fft.shape().end(), shape.begin()), "wrong shape");
+        test_utils::check(fft.batch_count() == batches, "wrong batch count");
         if (placement == syclfft::placement::in_place) {
             auto actual = input;
             fft.execute(actual.data());
@@ -132,18 +124,6 @@ namespace
                 std::is_same_v<Scalar, float> ? Scalar{2e-4} : Scalar{1e-11},
                 "out-of-place");
         }
-    }
-
-    template <class Function>
-    void expect_error(syclfft::error_code code, Function &&function)
-    {
-        try {
-            function();
-        } catch (const syclfft::exception &ex) {
-            check(ex.code() == code, "wrong exception code");
-            return;
-        }
-        throw std::runtime_error("expected syclfft::exception");
     }
 
 } // namespace
@@ -177,36 +157,37 @@ try {
         auto backward = syclfft::host::plan_dft_1d<double>(
             input.size(),
             syclfft::direction::backward,
-            {.normalization = syclfft::normalization::backward});
+            test_utils::make_plan_options(
+                syclfft::placement::out_of_place, syclfft::normalization::backward));
         forward.execute(input.data(), spectrum.data());
         backward.execute(spectrum.data(), restored.data());
         compare(restored, input, 2e-11, "host round trip");
     }
 
-    expect_error(syclfft::error_code::invalid_argument, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [] {
         (void)syclfft::host::plan_dft_1d<float>(0, syclfft::direction::forward);
     });
-    expect_error(syclfft::error_code::invalid_argument, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [] {
         (void)syclfft::host::plan_many_dft<float>(
             {std::numeric_limits<std::size_t>::max(), 2}, 1, syclfft::direction::forward);
     });
-    expect_error(syclfft::error_code::invalid_argument, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [] {
         (void)syclfft::host::plan_many_dft<float>({2, 2, 2, 2}, 1, syclfft::direction::forward);
     });
-    expect_error(syclfft::error_code::invalid_argument, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [] {
         (void)syclfft::host::plan_dft_1d<float>(4, static_cast<syclfft::direction>(0));
     });
-    expect_error(syclfft::error_code::invalid_pointer, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_pointer, [] {
         auto fft = syclfft::host::plan_dft_1d<float>(4, syclfft::direction::forward);
         fft.execute(nullptr, nullptr);
     });
-    expect_error(syclfft::error_code::invalid_argument, [] {
-        auto fft = syclfft::host::plan_dft_1d<float>(
-            4, syclfft::direction::forward, {.placement = syclfft::placement::in_place});
+    test_utils::expect_error(syclfft::error_code::invalid_argument, [] {
+        const auto options = test_utils::make_plan_options(syclfft::placement::in_place);
+        auto fft = syclfft::host::plan_dft_1d<float>(4, syclfft::direction::forward, options);
         std::vector<std::complex<float>> input(4), output(4);
         fft.execute(input.data(), output.data());
     });
-    expect_error(syclfft::error_code::invalid_state, [] {
+    test_utils::expect_error(syclfft::error_code::invalid_state, [] {
         auto original = syclfft::host::plan_dft_1d<float>(4, syclfft::direction::forward);
         auto moved = std::move(original);
         (void)moved;

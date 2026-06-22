@@ -1,3 +1,4 @@
+#include <syclfft/detail/cuda_queue_utils.hpp>
 #include <syclfft/detail/cufft_provider_abi.hpp>
 #include <syclfft/detail/provider_loader.hpp>
 #include <syclfft/syclfft.hpp>
@@ -27,6 +28,9 @@ namespace syclfft
             return value != 0 && (value & (value - 1)) == 0;
         }
 
+        template <class Scalar>
+        inline constexpr Scalar pi_v = static_cast<Scalar>(3.141592653589793238462643383279502884L);
+
         std::size_t next_power_of_two(std::size_t value)
         {
             std::size_t result = 1;
@@ -52,15 +56,6 @@ namespace syclfft
             }
             if (value != 1) {
                 result.clear();
-            }
-            return result;
-        }
-
-        std::size_t transform_size(const std::vector<std::size_t> &shape)
-        {
-            std::size_t result = 1;
-            for (const auto length : shape) {
-                result *= length;
             }
             return result;
         }
@@ -254,7 +249,7 @@ namespace syclfft
                 }
             }
             const Scalar sign = dir == direction::forward ? Scalar{-1} : Scalar{1};
-            const Scalar two_pi = Scalar{6.283185307179586476925286766559};
+            const Scalar two_pi = Scalar{2} * pi_v<Scalar>;
             for (std::size_t stage = 2; stage <= length; stage *= 2) {
                 for (std::size_t base = 0; base < length; base += stage) {
                     for (std::size_t j = 0; j < stage / 2; ++j) {
@@ -343,28 +338,16 @@ namespace syclfft
             return current;
         }
 
-        bool is_cuda_queue(const sycl::queue &queue)
-        {
-#if defined(SYCLFFT_USE_ADAPTIVECPP)
-            return queue.get_device().get_backend() == sycl::backend::cuda;
-#elif defined(SYCLFFT_USE_DPCPP)
-            return queue.get_backend() == sycl::backend::ext_oneapi_cuda;
-#else
-            (void)queue;
-            return false;
-#endif
-        }
-
         struct loaded_cufft_provider
         {
-            const detail::cufft_provider_v1 *api{};
+            const detail::cufft_provider_v2 *api{};
             std::shared_ptr<void> module;
         };
 
         loaded_cufft_provider
             try_load_cufft(const sycl::queue &queue, bool required, std::string *reason = nullptr)
         {
-            if (!is_cuda_queue(queue)) {
+            if (!detail::is_cuda_queue(queue)) {
                 if (reason) {
                     *reason = "queue does not use CUDA";
                 }
@@ -378,8 +361,8 @@ namespace syclfft
 #if defined(SYCLFFT_HAS_CUFFT_PROVIDER)
             try {
                 auto symbol = detail::load_provider_symbol(
-                    "syclfft_provider_cufft", "syclfft_get_cufft_provider_v1");
-                auto getter = reinterpret_cast<detail::get_cufft_provider_v1_fn>(symbol.symbol);
+                    "syclfft_provider_cufft", "syclfft_get_cufft_provider_v2");
+                auto getter = reinterpret_cast<detail::get_cufft_provider_v2_fn>(symbol.symbol);
                 const auto *api = getter();
                 if (!api || api->abi_version != SYCLFFT_CUFFT_PROVIDER_ABI_VERSION) {
                     throw exception(error_code::plugin_error, "cuFFT provider ABI mismatch");
@@ -445,7 +428,7 @@ namespace syclfft
           , lengths_(std::move(lengths))
           , batch_count_(batch_count)
           , element_count_(detail::checked_element_count(lengths_, batch_count_))
-          , transform_size_(transform_size(lengths_))
+          , transform_size_(detail::transform_size(lengths_))
           , direction_(dir)
           , options_(opts)
         {
@@ -492,7 +475,7 @@ namespace syclfft
             }
 
             if (selected_provider_ == provider::cufft) {
-                detail::cufft_plan_config_v1 config{};
+                detail::cufft_plan_config_v2 config{};
                 config.double_precision = std::is_same_v<Scalar, double>;
                 config.transform_direction = direction_;
                 config.transform_placement = options_.placement;
@@ -525,7 +508,7 @@ namespace syclfft
                     };
                     const auto make_twiddles = [](std::size_t length, Scalar sign) {
                         std::vector<complex_type> result(length);
-                        const Scalar two_pi = Scalar{6.283185307179586476925286766559};
+                        const Scalar two_pi = Scalar{2} * pi_v<Scalar>;
                         for (std::size_t index = 0; index < length; ++index) {
                             const auto angle = sign * two_pi * static_cast<Scalar>(index)
                                                / static_cast<Scalar>(length);
@@ -562,7 +545,7 @@ namespace syclfft
 
                         std::vector<complex_type> kernel(
                             convolution_length, complex_type{Scalar{0}, Scalar{0}});
-                        const Scalar pi = Scalar{3.1415926535897932384626433832795};
+                        const Scalar pi = pi_v<Scalar>;
                         std::vector<complex_type> chirp(length);
                         for (std::size_t index = 0; index < length; ++index) {
                             const auto square =
@@ -631,7 +614,7 @@ namespace syclfft
 
         sycl::event execute(
             const complex_type *input, complex_type *output,
-            std::span<const sycl::event> dependencies, bool one_pointer)
+            syclfft::span<const sycl::event> dependencies, bool one_pointer)
         {
             validate_pointer(input, queue_, "input");
             validate_pointer(output, queue_, "output");
@@ -846,12 +829,12 @@ namespace syclfft
         if (!impl_) {
             throw exception(error_code::invalid_state, "Cannot execute a moved-from plan");
         }
-        return impl_->execute(inout, inout, std::span<const sycl::event>{&dependency, 1}, true);
+        return impl_->execute(inout, inout, syclfft::span<const sycl::event>{&dependency, 1}, true);
     }
 
     template <class Scalar>
     sycl::event
-        plan<Scalar>::execute(complex_type *inout, std::span<const sycl::event> dependencies)
+        plan<Scalar>::execute(complex_type *inout, syclfft::span<const sycl::event> dependencies)
     {
         if (!impl_) {
             throw exception(error_code::invalid_state, "Cannot execute a moved-from plan");
@@ -875,12 +858,14 @@ namespace syclfft
         if (!impl_) {
             throw exception(error_code::invalid_state, "Cannot execute a moved-from plan");
         }
-        return impl_->execute(input, output, std::span<const sycl::event>{&dependency, 1}, false);
+        return impl_->execute(
+            input, output, syclfft::span<const sycl::event>{&dependency, 1}, false);
     }
 
     template <class Scalar>
     sycl::event plan<Scalar>::execute(
-        const complex_type *input, complex_type *output, std::span<const sycl::event> dependencies)
+        const complex_type *input, complex_type *output,
+        syclfft::span<const sycl::event> dependencies)
     {
         if (!impl_) {
             throw exception(error_code::invalid_state, "Cannot execute a moved-from plan");
@@ -889,10 +874,10 @@ namespace syclfft
     }
 
     template <class Scalar>
-    std::span<const std::size_t> plan<Scalar>::shape() const noexcept
+    syclfft::span<const std::size_t> plan<Scalar>::shape() const noexcept
     {
-        return impl_ ? std::span<const std::size_t>{impl_->lengths_}
-                     : std::span<const std::size_t>{};
+        return impl_ ? syclfft::span<const std::size_t>{impl_->lengths_}
+                     : syclfft::span<const std::size_t>{};
     }
 
     template <class Scalar>

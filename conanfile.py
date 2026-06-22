@@ -61,7 +61,7 @@ class SyclFftConan(ConanFile):
     def validate(self):
         if not self.options.with_host and not self.options.with_sycl:
             raise ConanInvalidConfiguration("At least one of with_host or with_sycl must be enabled")
-        check_min_cppstd(self, "20")
+        check_min_cppstd(self, "17")
 
     def layout(self):
         cmake_layout(self)

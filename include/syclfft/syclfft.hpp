@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
-#include <span>
 #include <sycl/sycl.hpp>
 #include <syclfft/common.hpp>
 #include <type_traits>
@@ -62,16 +61,16 @@ namespace syclfft
 
         sycl::event execute(complex_type *inout);
         sycl::event execute(complex_type *inout, const sycl::event &dependency);
-        sycl::event execute(complex_type *inout, std::span<const sycl::event> dependencies);
+        sycl::event execute(complex_type *inout, syclfft::span<const sycl::event> dependencies);
 
         sycl::event execute(const complex_type *input, complex_type *output);
         sycl::event
             execute(const complex_type *input, complex_type *output, const sycl::event &dependency);
         sycl::event execute(
             const complex_type *input, complex_type *output,
-            std::span<const sycl::event> dependencies);
+            syclfft::span<const sycl::event> dependencies);
 
-        [[nodiscard]] std::span<const std::size_t> shape() const noexcept;
+        [[nodiscard]] syclfft::span<const std::size_t> shape() const noexcept;
         [[nodiscard]] std::size_t batch_count() const noexcept;
         [[nodiscard]] syclfft::direction direction() const noexcept;
         [[nodiscard]] syclfft::provider selected_provider() const noexcept;
@@ -90,7 +89,7 @@ namespace syclfft
 
     template <class Scalar>
     plan<Scalar> plan_many_dft(
-        sycl::queue queue, std::span<const std::size_t> lengths, std::size_t batch_count,
+        sycl::queue queue, syclfft::span<const std::size_t> lengths, std::size_t batch_count,
         syclfft::direction direction, plan_options options = {})
     {
         return plan<Scalar>(

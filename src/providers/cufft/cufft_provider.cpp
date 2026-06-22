@@ -7,21 +7,13 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <syclfft/detail/cuda_queue_utils.hpp>
 #include <syclfft/detail/cufft_provider_abi.hpp>
+#include <syclfft/detail/provider_error_buffer.hpp>
 #include <vector>
 
 namespace
 {
-
-    void set_error(char *output, std::size_t capacity, const std::string &message)
-    {
-        if (!output || capacity == 0) {
-            return;
-        }
-        const auto count = std::min(capacity - 1, message.size());
-        std::memcpy(output, message.data(), count);
-        output[count] = '\0';
-    }
 
     const char *cufft_error(cufftResult result)
     {
@@ -56,15 +48,6 @@ namespace
         }
     }
 
-    bool is_cuda(const sycl::queue &queue)
-    {
-#if defined(SYCLFFT_USE_ADAPTIVECPP)
-        return queue.get_device().get_backend() == sycl::backend::cuda;
-#else
-        return queue.get_backend() == sycl::backend::ext_oneapi_cuda;
-#endif
-    }
-
     int native_device_id(const sycl::queue &queue)
     {
 #if defined(SYCLFFT_USE_ADAPTIVECPP)
@@ -78,12 +61,12 @@ namespace
     class cufft_plan_impl
     {
     public:
-        cufft_plan_impl(sycl::queue queue, const syclfft::detail::cufft_plan_config_v1 &config)
+        cufft_plan_impl(sycl::queue queue, const syclfft::detail::cufft_plan_config_v2 &config)
           : queue_(std::move(queue))
           , direction_(config.transform_direction)
           , double_precision_(config.double_precision)
         {
-            if (!is_cuda(queue_)) {
+            if (!syclfft::detail::is_cuda_queue(queue_)) {
                 throw std::runtime_error("queue is not CUDA-backed");
             }
             if (config.rank == 0 || config.rank > 3 || config.batch_count == 0) {
@@ -130,7 +113,7 @@ namespace
         }
 
         sycl::event
-            execute(const void *input, void *output, std::span<const sycl::event> dependencies)
+            execute(const void *input, void *output, syclfft::span<const sycl::event> dependencies)
         {
             const int fft_direction =
                 direction_ == syclfft::direction::forward ? CUFFT_FORWARD : CUFFT_INVERSE;
@@ -197,20 +180,20 @@ namespace
 
     bool supports(const sycl::queue &queue, char *error, std::size_t capacity)
     {
-        if (!is_cuda(queue)) {
-            set_error(error, capacity, "queue is not CUDA-backed");
+        if (!syclfft::detail::is_cuda_queue(queue)) {
+            syclfft::detail::set_error_buffer(error, capacity, "queue is not CUDA-backed");
             return false;
         }
         const auto result = cudaSetDevice(native_device_id(queue));
         if (result != cudaSuccess) {
-            set_error(error, capacity, cudaGetErrorString(result));
+            syclfft::detail::set_error_buffer(error, capacity, cudaGetErrorString(result));
             return false;
         }
         return true;
     }
 
     void *create(
-        sycl::queue &queue, const syclfft::detail::cufft_plan_config_v1 &config, char *error,
+        sycl::queue &queue, const syclfft::detail::cufft_plan_config_v2 &config, char *error,
         std::size_t capacity)
     {
         try {
@@ -219,7 +202,7 @@ namespace
             }
             return new cufft_plan_impl(queue, config);
         } catch (const std::exception &ex) {
-            set_error(error, capacity, ex.what());
+            syclfft::detail::set_error_buffer(error, capacity, ex.what());
             return nullptr;
         }
     }
@@ -230,7 +213,7 @@ namespace
     }
 
     sycl::event execute(
-        void *plan, const void *input, void *output, std::span<const sycl::event> dependencies,
+        void *plan, const void *input, void *output, syclfft::span<const sycl::event> dependencies,
         char *error, std::size_t capacity)
     {
         try {
@@ -239,24 +222,24 @@ namespace
             }
             return static_cast<cufft_plan_impl *>(plan)->execute(input, output, dependencies);
         } catch (const std::exception &ex) {
-            set_error(error, capacity, ex.what());
+            syclfft::detail::set_error_buffer(error, capacity, ex.what());
             return {};
         }
     }
 
-    const syclfft::detail::cufft_provider_v1 provider_api{
-        .abi_version = SYCLFFT_CUFFT_PROVIDER_ABI_VERSION,
-        .name = "cufft",
-        .supports = &supports,
-        .create = &create,
-        .destroy = &destroy,
-        .execute = &execute,
+    const syclfft::detail::cufft_provider_v2 provider_api{
+        SYCLFFT_CUFFT_PROVIDER_ABI_VERSION,
+        "cufft",
+        &supports,
+        &create,
+        &destroy,
+        &execute,
     };
 
 } // namespace
 
-SYCLFFT_CUFFT_PROVIDER_EXPORT const syclfft::detail::cufft_provider_v1 *
-    syclfft_get_cufft_provider_v1()
+SYCLFFT_CUFFT_PROVIDER_EXPORT const syclfft::detail::cufft_provider_v2 *
+    syclfft_get_cufft_provider_v2()
 {
     return &provider_api;
 }

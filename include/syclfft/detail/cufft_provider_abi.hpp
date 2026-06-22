@@ -3,16 +3,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <sycl/sycl.hpp>
 #include <syclfft/common.hpp>
 
-#define SYCLFFT_CUFFT_PROVIDER_ABI_VERSION 1u
+#define SYCLFFT_CUFFT_PROVIDER_ABI_VERSION 2u
 
 namespace syclfft::detail
 {
 
-    struct cufft_plan_config_v1
+    struct cufft_plan_config_v2
     {
         std::uint32_t abi_version{SYCLFFT_CUFFT_PROVIDER_ABI_VERSION};
         bool double_precision{};
@@ -23,18 +22,18 @@ namespace syclfft::detail
         std::size_t batch_count{};
     };
 
-    struct cufft_provider_v1
+    struct cufft_provider_v2
     {
         std::uint32_t abi_version;
         const char *name;
         bool (*supports)(const sycl::queue &, char *, std::size_t);
-        void *(*create)(sycl::queue &, const cufft_plan_config_v1 &, char *, std::size_t);
+        void *(*create)(sycl::queue &, const cufft_plan_config_v2 &, char *, std::size_t);
         void (*destroy)(void *);
         sycl::event (*execute)(
-            void *, const void *, void *, std::span<const sycl::event>, char *, std::size_t);
+            void *, const void *, void *, syclfft::span<const sycl::event>, char *, std::size_t);
     };
 
-    using get_cufft_provider_v1_fn = const cufft_provider_v1 *(*)();
+    using get_cufft_provider_v2_fn = const cufft_provider_v2 *(*)();
 
 } // namespace syclfft::detail
 
@@ -44,5 +43,5 @@ namespace syclfft::detail
 #    define SYCLFFT_CUFFT_PROVIDER_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
-SYCLFFT_CUFFT_PROVIDER_EXPORT const syclfft::detail::cufft_provider_v1 *
-    syclfft_get_cufft_provider_v1();
+SYCLFFT_CUFFT_PROVIDER_EXPORT const syclfft::detail::cufft_provider_v2 *
+    syclfft_get_cufft_provider_v2();

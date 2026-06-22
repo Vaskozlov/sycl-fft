@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`syclfft` is a C++20 complex-to-complex FFT library with FFTW-style reusable RAII plans. It provides:
+`syclfft` is a C++17 complex-to-complex FFT library with FFTW-style reusable RAII plans. It provides:
 
 - **SYCL API** (`syclfft::plan`) — async execution returning `sycl::event`, USM-based, works with AdaptiveCpp and Open DPC++
 - **Host API** (`syclfft::host::plan`) — synchronous, uses `std::complex`, isolated from SYCL (no SYCL runtime needed)
@@ -13,7 +13,7 @@ The provider architecture is plugin-based: the portable SYCL provider is built-i
 
 ## Build System
 
-CMake 3.22+, C++20, **shared libraries only** (static builds are a fatal error).
+CMake 3.22+, C++17, **shared libraries only** (static builds are a fatal error).
 
 ### Quick Build (Host/FFTW only — works on macOS)
 
@@ -71,7 +71,7 @@ cmake --build build
 ### Conan 2
 
 ```sh
-conan install . -of build/conan -s build_type=Release -s compiler.cppstd=20 --build=missing
+conan install . -of build/conan -s build_type=Release -s compiler.cppstd=17 --build=missing
 cmake --preset conan-release
 cmake --build --preset conan-release
 ```
@@ -138,7 +138,7 @@ Explicit provider requests never fall back. FFTW on SYCL CPU queues is synchrono
 
 ### Public API
 
-**`include/syclfft/syclfft.hpp`** — SYCL API: `plan_dft_1d/2d/3d`, `plan_many_dft`, `query_providers(queue)`, `plan<Scalar>` with `execute()` overloads accepting optional `sycl::event` or `std::span<const sycl::event>` dependencies.
+**`include/syclfft/syclfft.hpp`** — SYCL API: `plan_dft_1d/2d/3d`, `plan_many_dft`, `query_providers(queue)`, `plan<Scalar>` with `execute()` overloads accepting optional `sycl::event` or `syclfft::span<const sycl::event>` dependencies.
 
 **`include/syclfft/host.hpp`** — Host API (in `syclfft::host` namespace): same `plan<Scalar>` interface but synchronous, no events, uses `std::complex`.
 

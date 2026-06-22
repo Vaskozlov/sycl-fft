@@ -1,5 +1,10 @@
+add_executable(syclfft_span_tests span_tests.cpp)
+target_link_libraries(syclfft_span_tests PRIVATE syclfft::core)
+add_test(NAME syclfft.span COMMAND syclfft_span_tests)
+
 if(TARGET syclfft_host)
   add_executable(syclfft_host_tests host_tests.cpp)
+  target_include_directories(syclfft_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(syclfft_host_tests PRIVATE syclfft::host)
   add_test(NAME syclfft.host COMMAND syclfft_host_tests)
   set_tests_properties(syclfft.host PROPERTIES
@@ -22,6 +27,7 @@ endif()
 
 if(TARGET syclfft_sycl)
   add_executable(syclfft_sycl_tests sycl_tests.cpp)
+  target_include_directories(syclfft_sycl_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(syclfft_sycl_tests PRIVATE syclfft::sycl)
   if(SYCLFFT_SYCL_IMPLEMENTATION STREQUAL "AdaptiveCpp")
     add_sycl_to_target(TARGET syclfft_sycl_tests SOURCES sycl_tests.cpp)

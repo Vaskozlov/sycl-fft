@@ -8,8 +8,9 @@ int main()
     for (int i = 1; i < 4; ++i) {
         data[i] = {0.0f, 0.0f};
     }
-    auto plan = syclfft::plan_dft_1d<float>(
-        queue, 4, syclfft::direction::forward, {.placement = syclfft::placement::in_place});
+    syclfft::plan_options options;
+    options.placement = syclfft::placement::in_place;
+    auto plan = syclfft::plan_dft_1d<float>(queue, 4, syclfft::direction::forward, options);
     plan.execute(data).wait_and_throw();
     const bool correct = data[0].real() == 1.0f && data[0].imag() == 0.0f;
     sycl::free(data, queue);
