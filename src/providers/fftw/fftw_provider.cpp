@@ -10,6 +10,7 @@
 #include <string>
 #include <syclfft/detail/provider_abi.h>
 #include <syclfft/detail/provider_error_buffer.hpp>
+#include <syclfft/detail/trace.hpp>
 #include <type_traits>
 #include <vector>
 
@@ -176,6 +177,7 @@ namespace
             flags_ = config.measure ? FFTW_MEASURE : FFTW_ESTIMATE;
 
             const auto bytes = elements * sizeof(native_complex);
+            syclfft::detail::trace("fftw: allocating planning buffers");
             planning_input_.reset(traits::allocate(bytes));
             if (!planning_input_) {
                 throw std::bad_alloc{};
@@ -191,8 +193,11 @@ namespace
             }
 
             {
+                syclfft::detail::trace("fftw: waiting for planner mutex");
                 std::scoped_lock lock(fftw_planner_mutex());
+                syclfft::detail::trace("fftw: calling plan_many_dft");
                 aligned_ = make_plan(flags_);
+                syclfft::detail::trace("fftw: plan_many_dft returned");
             }
             if (!aligned_) {
                 throw std::runtime_error("fftw_plan_many_dft returned null");
@@ -305,6 +310,7 @@ namespace
     void *create_plan(const syclfft_host_plan_config_v1 *config, char *error, size_t capacity)
     {
         try {
+            syclfft::detail::trace("fftw: create callback entered");
             if (!config || config->abi_version != SYCLFFT_PROVIDER_ABI_VERSION) {
                 throw std::runtime_error("Invalid FFTW provider configuration ABI");
             }

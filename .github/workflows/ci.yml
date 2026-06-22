@@ -267,6 +267,7 @@ jobs:
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --install build/windows-host --prefix "%CD%\install"
           cmake -S test_package -B consumer -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
             -Dsyclfft_DIR=%CD%\install\lib\cmake\syclfft ^
             -DSYCLFFT_TEST_HOST=ON ^
             -DSYCLFFT_TEST_SYCL=OFF
@@ -277,6 +278,7 @@ jobs:
         run: |
           $env:PATH = "$pwd\install\bin;$env:PATH"
           $env:SYCLFFT_PLUGIN_PATH = "$pwd\install\bin\syclfft\providers"
+          $env:SYCLFFT_TRACE = "1"
           Write-Host "Starting installed host consumer"
           $process = Start-Process `
             -FilePath "$pwd\consumer\test_host.exe" `

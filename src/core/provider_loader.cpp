@@ -2,10 +2,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
-#include <mutex>
 #include <sstream>
 #include <syclfft/detail/provider_loader.hpp>
-#include <unordered_map>
+#include <syclfft/detail/trace.hpp>
 
 #if defined(_WIN32)
 #    include <windows.h>
@@ -81,26 +80,30 @@ namespace syclfft::detail
 #if defined(_WIN32)
         std::shared_ptr<void> load_pinned_module(const std::filesystem::path &path)
         {
-            // Provider DLLs are process-wide. Pinning each path once avoids
-            // running C++ and statically linked FFTW teardown from FreeLibrary,
-            // which can deadlock while Windows holds the loader lock.
-            static std::mutex mutex;
-            static std::unordered_map<std::string, std::shared_ptr<void>> modules;
-
+            // Let Windows own module lifetime. PIN prevents provider teardown
+            // before process termination without holding a user-space mutex
+            // across LoadLibrary.
             const auto key = path.string();
-            std::scoped_lock lock(mutex);
-            const auto found = modules.find(key);
-            if (found != modules.end()) {
-                return found->second;
-            }
-
+            trace("core: calling LoadLibrary for provider");
             HMODULE raw = LoadLibraryA(key.c_str());
+            trace("core: LoadLibrary returned");
             if (!raw) {
                 return {};
             }
-            auto module = std::shared_ptr<void>(raw, [](void *) noexcept {});
-            modules.emplace(key, module);
-            return module;
+
+            HMODULE pinned = nullptr;
+            trace("core: pinning provider module");
+            const auto pinned_module = GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                reinterpret_cast<LPCSTR>(raw),
+                &pinned);
+            trace("core: provider module pin returned");
+            if (!pinned_module) {
+                FreeLibrary(raw);
+                return {};
+            }
+            FreeLibrary(raw);
+            return std::shared_ptr<void>(pinned, [](void *) noexcept {});
         }
 #endif
 
@@ -174,9 +177,12 @@ namespace syclfft::detail
 
     loaded_host_provider load_host_provider(const std::string &provider_file)
     {
+        trace("core: resolving host provider symbol");
         auto loaded = load_provider_symbol(provider_file, "syclfft_get_host_provider_v1");
         auto symbol = reinterpret_cast<syclfft_get_host_provider_v1_fn>(loaded.symbol);
+        trace("core: calling host provider entry point");
         const auto *api = symbol();
+        trace("core: host provider entry point returned");
         if (!api || api->abi_version != SYCLFFT_PROVIDER_ABI_VERSION) {
             throw exception(
                 error_code::plugin_error,
@@ -217,6 +223,7 @@ namespace syclfft::detail
                 errors += path.string() + ": entry point '" + symbol_name + "' missing; ";
                 continue;
             }
+            trace("core: provider symbol resolved");
             return loaded_provider_symbol{symbol, std::move(module)};
         }
         throw exception(

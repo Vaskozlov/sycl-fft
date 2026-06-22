@@ -3,6 +3,7 @@
 #include <limits>
 #include <mutex>
 #include <syclfft/detail/provider_loader.hpp>
+#include <syclfft/detail/trace.hpp>
 #include <syclfft/host.hpp>
 #include <type_traits>
 
@@ -51,7 +52,9 @@ namespace syclfft::host
                 throw exception(
                     error_code::provider_unavailable, "Host plans only support the FFTW provider");
             }
+            detail::trace("host: loading FFTW provider");
             auto loaded = detail::load_host_provider("syclfft_provider_fftw");
+            detail::trace("host: FFTW provider loaded");
             api_ = loaded.api;
             module_ = std::move(loaded.module);
 
@@ -69,7 +72,9 @@ namespace syclfft::host
             }
 
             std::array<char, 1024> error{};
+            detail::trace("host: calling FFTW provider create");
             handle_ = api_->create(&config, error.data(), error.size());
+            detail::trace("host: FFTW provider create returned");
             if (!handle_) {
                 throw exception(
                     error_code::planning_failed,
