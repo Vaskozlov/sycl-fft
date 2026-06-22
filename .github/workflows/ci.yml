@@ -13,7 +13,38 @@ env:
   DPCPP_VERSION: "6.3.0"
 
 jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install quality tools
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          clang clang-format clang-tidy clang-tools cmake libfftw3-dev ninja-build
+      - name: Check formatting
+        run: >-
+          find examples include src test_package tests
+          -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \)
+          ! -path '*/build/*'
+          -exec clang-format --dry-run --Werror {} +
+      - name: Configure clang-tidy
+        run: >-
+          cmake -S . -B build/tidy -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DSYCLFFT_BUILD_HOST=ON
+          -DSYCLFFT_BUILD_SYCL=OFF
+          -DSYCLFFT_USE_SYSTEM_FFTW=ON
+          -DSYCLFFT_BUILD_TESTS=ON
+          -DSYCLFFT_BUILD_EXAMPLES=ON
+      - name: Run clang-tidy
+        run: run-clang-tidy -p build/tidy -quiet -warnings-as-errors='*'
+
   macos-host:
+    needs: quality
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
@@ -40,6 +71,7 @@ jobs:
       - run: ./consumer/test_host
 
   macos-adaptivecpp-cpu:
+    needs: quality
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
@@ -62,6 +94,7 @@ jobs:
       - run: ./build/tests/syclfft_sycl_tests
 
   linux-adaptivecpp-cpu:
+    needs: quality
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -118,6 +151,7 @@ jobs:
       - run: ./consumer/test_sycl
 
   linux-dpcpp-opencl:
+    needs: quality
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -194,6 +228,7 @@ jobs:
         run: ./build/tests/syclfft_sycl_tests
 
   windows-host:
+    needs: quality
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -203,6 +238,7 @@ jobs:
       - name: Install Conan
         run: python -m pip install "conan>=2.20,<3"
       - name: Build and test host library
+        timeout-minutes: 30
         shell: cmd
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
@@ -222,18 +258,39 @@ jobs:
             -DSYCLFFT_BUILD_TESTS=ON
           cmake --build build/windows-host
           set "PATH=%CD%\build\windows-host;%PATH%"
-          ctest --test-dir build/windows-host --output-on-failure
+          ctest --test-dir build/windows-host --output-on-failure --timeout 120
+      - name: Build installed host consumer
+        timeout-minutes: 10
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --install build/windows-host --prefix "%CD%\install"
           cmake -S test_package -B consumer -G Ninja ^
             -Dsyclfft_DIR=%CD%\install\lib\cmake\syclfft ^
             -DSYCLFFT_TEST_HOST=ON ^
             -DSYCLFFT_TEST_SYCL=OFF
           cmake --build consumer
-          set "PATH=%CD%\install\bin;%PATH%"
-          set "SYCLFFT_PLUGIN_PATH=%CD%\install\bin\syclfft\providers"
-          consumer\test_host.exe
+      - name: Run installed host consumer
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd\install\bin;$env:PATH"
+          $env:SYCLFFT_PLUGIN_PATH = "$pwd\install\bin\syclfft\providers"
+          Write-Host "Starting installed host consumer"
+          $process = Start-Process `
+            -FilePath "$pwd\consumer\test_host.exe" `
+            -NoNewWindow -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Installed host consumer timed out after 120 seconds"
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Installed host consumer failed with exit code $($process.ExitCode)"
+          }
+          Write-Host "Installed host consumer passed"
 
   windows-dpcpp-build:
+    needs: quality
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -269,6 +326,7 @@ jobs:
           cmake --build build
 
   windows-adaptivecpp-cpu:
+    needs: quality
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v7
@@ -304,6 +362,7 @@ jobs:
           build\tests\syclfft_sycl_tests.exe
 
   cuda-plugin-build:
+    needs: quality
     runs-on: ubuntu-22.04
     container: nvidia/cuda:12.6.3-devel-ubuntu22.04
     steps:

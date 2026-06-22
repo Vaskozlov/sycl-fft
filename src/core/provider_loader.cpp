@@ -2,8 +2,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <syclfft/detail/provider_loader.hpp>
+#include <unordered_map>
 
 #if defined(_WIN32)
 #    include <windows.h>
@@ -75,6 +77,32 @@ namespace syclfft::detail
             return base + ".so";
 #endif
         }
+
+#if defined(_WIN32)
+        std::shared_ptr<void> load_pinned_module(const std::filesystem::path &path)
+        {
+            // Provider DLLs are process-wide. Pinning each path once avoids
+            // running C++ and statically linked FFTW teardown from FreeLibrary,
+            // which can deadlock while Windows holds the loader lock.
+            static std::mutex mutex;
+            static std::unordered_map<std::string, std::shared_ptr<void>> modules;
+
+            const auto key = path.string();
+            std::scoped_lock lock(mutex);
+            const auto found = modules.find(key);
+            if (found != modules.end()) {
+                return found->second;
+            }
+
+            HMODULE raw = LoadLibraryA(key.c_str());
+            if (!raw) {
+                return {};
+            }
+            auto module = std::shared_ptr<void>(raw, [](void *) noexcept {});
+            modules.emplace(key, module);
+            return module;
+        }
+#endif
 
     } // namespace
 
@@ -164,16 +192,12 @@ namespace syclfft::detail
         for (const auto &directory : provider_search_paths()) {
             const auto path = std::filesystem::path(directory) / module_filename(provider_file);
 #if defined(_WIN32)
-            HMODULE raw = LoadLibraryA(path.string().c_str());
-            if (!raw) {
+            auto module = load_pinned_module(path);
+            if (!module) {
                 errors += path.string() + ": load failed; ";
                 continue;
             }
-            auto module = std::shared_ptr<void>(raw, [](void *handle) {
-                if (handle) {
-                    FreeLibrary(static_cast<HMODULE>(handle));
-                }
-            });
+            auto raw = static_cast<HMODULE>(module.get());
             void *symbol = reinterpret_cast<void *>(GetProcAddress(raw, symbol_name.c_str()));
 #else
             void *raw = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);

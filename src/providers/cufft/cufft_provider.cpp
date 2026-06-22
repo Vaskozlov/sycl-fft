@@ -121,8 +121,7 @@ namespace
             const auto cufft_handle = handle_;
             const bool dp = double_precision_;
             std::vector<sycl::event> deps(dependencies.begin(), dependencies.end());
-            return queue_.AdaptiveCpp_enqueue_custom_operation(
-                [=](sycl::interop_handle &interop) {
+            return queue_.AdaptiveCpp_enqueue_custom_operation([=](sycl::interop_handle &interop) {
                 auto stream = interop.get_native_queue<sycl::backend::cuda>();
                 check(cufftSetStream(cufft_handle, stream), "cufftSetStream");
                 if (dp) {
