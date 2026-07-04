@@ -7,7 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `syclfft` is a C++17 complex-to-complex FFT library with FFTW-style reusable RAII plans. It provides:
 
 - **SYCL API** (`syclfft::plan`) — async execution returning `sycl::event`, USM-based, works with AdaptiveCpp and Open DPC++
-- **Host API** (`syclfft::host::plan`) — synchronous, uses `std::complex`, isolated from SYCL (no SYCL runtime needed)
 
 The provider architecture is plugin-based: the portable SYCL provider is built-in, while FFTW and cuFFT live in loadable modules discovered via `SYCLFFT_PLUGIN_PATH`.
 
@@ -15,22 +14,12 @@ The provider architecture is plugin-based: the portable SYCL provider is built-i
 
 CMake 3.22+, C++17, **shared libraries only** (static builds are a fatal error).
 
-### Quick Build (Host/FFTW only — works on macOS)
-
-```sh
-# macOS (system FFTW via brew)
-brew install cmake ninja fftw
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DSYCLFFT_BUILD_SYCL=OFF -DSYCLFFT_USE_SYSTEM_FFTW=ON -DSYCLFFT_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
 ### Build with AdaptiveCpp SYCL
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DAdaptiveCpp_DIR=<path>/lib/cmake/AdaptiveCpp \
+  -DACPP_TARGETS=omp \
   -DSYCLFFT_BUILD_SYCL=ON -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp \
   -DSYCLFFT_BUILD_TESTS=ON
 cmake --build build
@@ -50,9 +39,9 @@ cmake --build build
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `SYCLFFT_BUILD_HOST` | ON | Host API + FFTW provider module |
-| `SYCLFFT_BUILD_SYCL` | ON (OFF on macOS) | SYCL API |
+| `SYCLFFT_BUILD_SYCL` | ON | SYCL API |
 | `SYCLFFT_SYCL_IMPLEMENTATION` | AdaptiveCpp | `AdaptiveCpp` or `DPCPP` |
+| `SYCLFFT_FFTW` | AUTO | Build FFTW provider: `AUTO`/`ON`/`OFF` |
 | `SYCLFFT_CUFFT` | AUTO | Build cuFFT provider: `AUTO`/`ON`/`OFF` |
 | `SYCLFFT_USE_SYSTEM_FFTW` | OFF | Use system FFTW instead of Conan |
 | `SYCLFFT_BUILD_TESTS` | OFF | Enable tests |
@@ -63,7 +52,6 @@ cmake --build build
 | Target | Description |
 |--------|-------------|
 | `syclfft::core` | Provider loader (dlopen/LoadLibrary, ABI checking) |
-| `syclfft::host` | Host API (links core, delegates to FFTW provider) |
 | `syclfft::sycl` | SYCL API (links core, includes portable SYCL provider) |
 | `syclfft_provider_fftw` | MODULE lib — FFTW provider plugin |
 | `syclfft_provider_cufft` | MODULE lib — cuFFT provider plugin (optional) |
@@ -84,9 +72,9 @@ Enable with `-DSYCLFFT_BUILD_TESTS=ON`. Three test executables:
 
 | Test | CTest name | What it covers |
 |------|------------|----------------|
-| `syclfft_host_tests` | `syclfft.host` | Host API via FFTW: 1D/2D/3D, normalizations, in-place/out-of-place, round-trip accuracy, error handling |
 | `syclfft_sycl_tests` | `syclfft.sycl` | SYCL API + portable provider: radix-2, mixed-radix, Bluestein, multidimensional, batching, events, concurrent plans, provider querying |
 | `syclfft_plugin_tests` | `syclfft.plugin-abi` | Provider ABI version rejection |
+| `syclfft_span_tests` | `syclfft.span` | C++17 span helper behavior |
 
 All tests set `SYCLFFT_PLUGIN_PATH` to the build providers directory automatically via CTest properties.
 
@@ -97,7 +85,7 @@ All tests set `SYCLFFT_PLUGIN_PATH` to the build providers directory automatical
 ctest --test-dir build --output-on-failure
 
 # Single test
-ctest --test-dir build --output-on-failure --test-case syclfft.host
+ctest --test-dir build --output-on-failure -R syclfft.sycl
 
 # Run SYCL tests directly (e.g., for debugging)
 ./build/tests/syclfft_sycl_tests
@@ -116,7 +104,7 @@ The core library (`syclfft_core`) contains a provider loader that uses `dlopen`/
 
 The working directory is **never** searched. Missing modules and ABI failures are reported through `query_providers()`.
 
-Provider ABI is defined in `include/syclfft/detail/provider_abi.h` (C ABI for host/FFTW) and `include/syclfft/detail/cufft_provider_abi.hpp` (C++ ABI for cuFFT).
+Provider ABI is defined in `include/syclfft/detail/provider_abi.h` (C ABI for FFTW) and `include/syclfft/detail/cufft_provider_abi.hpp` (C++ ABI for cuFFT).
 
 ### Portable SYCL Provider (Built-in)
 
@@ -140,8 +128,6 @@ Explicit provider requests never fall back. FFTW on SYCL CPU queues is synchrono
 
 **`include/syclfft/syclfft.hpp`** — SYCL API: `plan_dft_1d/2d/3d`, `plan_many_dft`, `query_providers(queue)`, `plan<Scalar>` with `execute()` overloads accepting optional `sycl::event` or `syclfft::span<const sycl::event>` dependencies.
 
-**`include/syclfft/host.hpp`** — Host API (in `syclfft::host` namespace): same `plan<Scalar>` interface but synchronous, no events, uses `std::complex`.
-
 **`include/syclfft/common.hpp`** — Shared enums (`direction`, `placement`, `normalization`, `planning_mode`, `provider`), `plan_options`, `provider_status`, `error_code`, `exception`.
 
 ### Third-Party
@@ -151,9 +137,9 @@ SyclCPLX (`third_party/syclcplx/`) — vendored SYCL complex number header, pinn
 ## CI Coverage
 
 All GitHub-hosted runners, no GPU or self-hosted required:
-- **macOS**: Host FFTW + install consumer; AdaptiveCpp OpenMP CPU
+- **macOS**: AdaptiveCpp OpenMP CPU, including the optional FFTW provider
 - **Linux**: AdaptiveCpp OpenMP CPU + install consumer; DPC++ with PoCL (graceful rejection) and Intel CPU OpenCL (full execution)
-- **Windows**: Host FFTW via Conan + install consumer; DPC++ compile/link only; AdaptiveCpp OpenMP CPU
+- **Windows**: DPC++ compile/link only; AdaptiveCpp OpenMP CPU
 - **CUDA**: Compile-only cuFFT plugin in NVIDIA container (DPC++)
 
 ## Code Style

@@ -2,28 +2,19 @@ add_executable(syclfft_span_tests span_tests.cpp)
 target_link_libraries(syclfft_span_tests PRIVATE syclfft::core)
 add_test(NAME syclfft.span COMMAND syclfft_span_tests)
 
-if(TARGET syclfft_host)
-  add_executable(syclfft_host_tests host_tests.cpp)
-  target_include_directories(syclfft_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(syclfft_host_tests PRIVATE syclfft::host)
-  add_test(NAME syclfft.host COMMAND syclfft_host_tests)
-  set_tests_properties(syclfft.host PROPERTIES
-    ENVIRONMENT "SYCLFFT_PLUGIN_PATH=${SYCLFFT_BUILD_PROVIDER_DIR}")
-
-  add_library(syclfft_bad_fftw MODULE bad_fftw_provider.cpp)
-  target_include_directories(syclfft_bad_fftw PRIVATE ${PROJECT_SOURCE_DIR}/include)
-  set_target_properties(syclfft_bad_fftw PROPERTIES
-    PREFIX ""
-    OUTPUT_NAME "syclfft_provider_fftw"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bad-provider"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bad-provider")
-  add_executable(syclfft_plugin_tests plugin_tests.cpp)
-  target_link_libraries(syclfft_plugin_tests PRIVATE syclfft::host)
-  add_dependencies(syclfft_plugin_tests syclfft_bad_fftw)
-  add_test(NAME syclfft.plugin-abi COMMAND syclfft_plugin_tests)
-  set_tests_properties(syclfft.plugin-abi PROPERTIES
-    ENVIRONMENT "SYCLFFT_PLUGIN_PATH=${CMAKE_CURRENT_BINARY_DIR}/bad-provider")
-endif()
+add_library(syclfft_bad_fftw MODULE bad_fftw_provider.cpp)
+target_include_directories(syclfft_bad_fftw PRIVATE ${PROJECT_SOURCE_DIR}/include)
+set_target_properties(syclfft_bad_fftw PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "syclfft_provider_fftw"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bad-provider"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bad-provider")
+add_executable(syclfft_plugin_tests plugin_tests.cpp)
+target_link_libraries(syclfft_plugin_tests PRIVATE syclfft::core)
+add_dependencies(syclfft_plugin_tests syclfft_bad_fftw)
+add_test(NAME syclfft.plugin-abi COMMAND syclfft_plugin_tests)
+set_tests_properties(syclfft.plugin-abi PROPERTIES
+  ENVIRONMENT "SYCLFFT_PLUGIN_PATH=${CMAKE_CURRENT_BINARY_DIR}/bad-provider")
 
 if(TARGET syclfft_sycl)
   add_executable(syclfft_sycl_tests sycl_tests.cpp)

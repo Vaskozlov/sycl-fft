@@ -10,9 +10,10 @@ Version 0.1 supports:
 - contiguous 1D, 2D, and 3D transforms and contiguous batches;
 - in-place and out-of-place execution;
 - no normalization, forward/backward normalization, and orthogonal normalization;
-- AdaptiveCpp and Open DPC++ on Linux and Windows;
-- host-only FFTW on macOS;
+- AdaptiveCpp on Linux, Windows, and macOS;
+- Open DPC++ on Linux and Windows;
 - a portable pure-SYCL provider for CPU and OpenCL queues;
+- an optional runtime-loaded FFTW provider for SYCL CPU queues;
 - an optional runtime-loaded cuFFT provider for CUDA queues.
 
 R2C/C2R, arbitrary strides, split-complex storage, wisdom, and graph-capture
@@ -69,21 +70,8 @@ An explicit provider request never falls back. Explicit FFTW selection is
 available for SYCL CPU queues with host/shared USM and is synchronous. Inspect
 runtime state with `syclfft::query_providers(queue)`.
 
-## Host API
-
-```cpp
-#include <syclfft/host.hpp>
-
-std::vector<std::complex<double>> input(256), output(256);
-syclfft::plan_options options;
-options.placement = syclfft::placement::out_of_place;
-auto fft = syclfft::host::plan_dft_1d<double>(
-    256, syclfft::direction::forward, options);
-fft.execute(input.data(), output.data());
-```
-
-The host library is isolated from SYCL: linking `syclfft::host` does not load or
-link a SYCL runtime.
+`syclfft` intentionally does not wrap a standalone host-only FFT API. If an
+application does not need SYCL queues, events, or USM, use FFTW directly.
 
 ## Providers
 
@@ -119,21 +107,22 @@ ctest --test-dir build/conan/build/Release --output-on-failure
 
 Conan options are:
 
-- `with_host=True|False`;
-- `with_sycl=True|False` (forced off on macOS);
 - `sycl_implementation=adaptivecpp|dpcpp`;
+- `with_fftw=True|False`;
 - `use_system_fftw=True|False`;
 - `with_cufft=auto|True|False`.
 
 The default dependency is `fftw/3.3.10`, built static with single and double
-precision only. CUDA is never fetched by Conan. `with_cufft=auto` builds the
-plugin only when CMake finds an installed CUDA Toolkit; `True` requires it.
+precision only when `with_fftw=True`. CUDA is never fetched by Conan.
+`with_cufft=auto` builds the plugin only when CMake finds an installed CUDA
+Toolkit; `True` requires it.
 
 For AdaptiveCpp, make its CMake package discoverable, for example:
 
 ```sh
 cmake -S . -B build -G Ninja \
   -DAdaptiveCpp_DIR=/opt/homebrew/opt/adaptivecpp/lib/cmake/AdaptiveCpp \
+  -DACPP_TARGETS=omp \
   -DSYCLFFT_BUILD_SYCL=ON -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
 ```
 
@@ -143,27 +132,27 @@ For Open DPC++, configure with `icpx`/`dpcpp` and
 System FFTW mode requires both `fftw3` and `fftw3f`:
 
 ```sh
-cmake -S . -B build -DSYCLFFT_USE_SYSTEM_FFTW=ON
+cmake -S . -B build -DSYCLFFT_FFTW=ON -DSYCLFFT_USE_SYSTEM_FFTW=ON
 ```
 
 Set `FFTW3_ROOT` when the installation is outside normal CMake or pkg-config
 search paths.
 
-Installed CMake targets and matching Conan components are `syclfft::host` and
+The installed public CMake target and matching Conan component is
 `syclfft::sycl` (plus the internal shared `syclfft::core`).
 
 ## Continuous integration
 
-The GitHub Actions workflow uses GitHub-hosted runners only. It covers macOS
-FFTW; Windows host FFTW and package-consumer tests; AdaptiveCpp OpenMP CPU
-execution on macOS, Linux, and Windows; Open DPC++ capability handling with
-PoCL and execution through Intel CPU OpenCL on Linux; Open DPC++ compilation
-and linking on Windows; install-tree consumers; and a compile-only cuFFT plugin
+The GitHub Actions workflow uses GitHub-hosted runners only. It covers
+AdaptiveCpp OpenMP CPU execution on macOS, Linux, and Windows; the optional FFTW
+provider through the macOS AdaptiveCpp job; Open DPC++ capability handling with
+PoCL and execution through Intel CPU OpenCL on Linux; Open DPC++ compilation and
+linking on Windows; install-tree SYCL consumers; and a compile-only cuFFT plugin
 build in an NVIDIA CUDA development container. The Windows AdaptiveCpp job uses
-the official LLVM 20 nightly binary from the project's `develop` workflow.
-Open DPC++ does not provide an OpenMP backend, and its native CPU target is
-currently disabled on Windows, so DPC++ execution is not claimed by that job.
-No GPU or self-hosted runner is required.
+the official LLVM 20 nightly binary from the project's `develop` workflow. Open
+DPC++ does not provide an OpenMP backend, and its native CPU target is currently
+disabled on Windows, so DPC++ execution is not claimed by that job. No GPU or
+self-hosted runner is required.
 
 ## License
 

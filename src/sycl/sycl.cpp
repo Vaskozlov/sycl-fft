@@ -1,20 +1,19 @@
-#include <syclfft/detail/cuda_queue_utils.hpp>
-#include <syclfft/detail/cufft_provider_abi.hpp>
-#include <syclfft/detail/provider_loader.hpp>
-#include <syclfft/syclfft.hpp>
-
-#if defined(SYCLFFT_HAS_FFTW_PROVIDER)
-#    include <syclfft/host.hpp>
-#endif
-
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <string>
+#include <syclfft/detail/cuda_queue_utils.hpp>
+#include <syclfft/detail/cufft_provider_abi.hpp>
+#include <syclfft/detail/provider_loader.hpp>
+#include <syclfft/detail/trace.hpp>
+#include <syclfft/syclfft.hpp>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -30,6 +29,26 @@ namespace syclfft
 
         template <class Scalar>
         inline constexpr Scalar pi_v = static_cast<Scalar>(3.141592653589793238462643383279502884L);
+
+        template <class Scalar>
+        constexpr syclfft_scalar_v1 scalar_id()
+        {
+            if constexpr (std::is_same_v<Scalar, float>) {
+                return SYCLFFT_SCALAR_FLOAT_V1;
+            }
+            return SYCLFFT_SCALAR_DOUBLE_V1;
+        }
+
+        std::int32_t direction_id(syclfft::direction direction)
+        {
+            switch (direction) {
+            case syclfft::direction::forward:
+                return SYCLFFT_DIRECTION_FORWARD_V1;
+            case syclfft::direction::backward:
+                return SYCLFFT_DIRECTION_BACKWARD_V1;
+            }
+            throw exception(error_code::invalid_argument, "Invalid FFT direction");
+        }
 
         std::size_t next_power_of_two(std::size_t value)
         {
@@ -68,6 +87,120 @@ namespace syclfft
             }
             return result;
         }
+
+#if defined(SYCLFFT_HAS_FFTW_PROVIDER)
+        template <class Scalar>
+        class fftw_plan_adapter
+        {
+        public:
+            using complex_type = complex<Scalar>;
+
+            fftw_plan_adapter(
+                std::vector<std::size_t> lengths, std::size_t batch_count, syclfft::direction dir,
+                plan_options opts)
+              : lengths_(std::move(lengths))
+              , batch_count_(batch_count)
+              , element_count_(detail::checked_element_count(lengths_, batch_count_))
+              , direction_(dir)
+              , options_(opts)
+            {
+                detail::trace("sycl: loading FFTW provider");
+                auto loaded = detail::load_host_provider("syclfft_provider_fftw");
+                detail::trace("sycl: FFTW provider loaded");
+                api_ = loaded.api;
+                module_ = std::move(loaded.module);
+
+                syclfft_host_plan_config_v1 config{};
+                config.abi_version = SYCLFFT_PROVIDER_ABI_VERSION;
+                config.scalar = scalar_id<Scalar>();
+                config.direction = direction_id(direction_);
+                config.rank = static_cast<std::uint32_t>(lengths_.size());
+                config.batch_count = static_cast<std::uint64_t>(batch_count_);
+                config.in_place =
+                    static_cast<std::uint32_t>(options_.placement == placement::in_place);
+                config.measure =
+                    static_cast<std::uint32_t>(options_.planning == planning_mode::measure);
+                for (std::size_t i = 0; i < lengths_.size(); ++i) {
+                    config.lengths[i] = static_cast<std::uint64_t>(lengths_[i]);
+                }
+
+                std::array<char, 1024> error{};
+                detail::trace("sycl: calling FFTW provider create");
+                handle_ = api_->create(&config, error.data(), error.size());
+                detail::trace("sycl: FFTW provider create returned");
+                if (!handle_) {
+                    throw exception(
+                        error_code::planning_failed,
+                        error[0] ? error.data() : "FFTW plan creation failed");
+                }
+            }
+
+            fftw_plan_adapter(const fftw_plan_adapter &) = delete;
+            fftw_plan_adapter &operator=(const fftw_plan_adapter &) = delete;
+            fftw_plan_adapter(fftw_plan_adapter &&) = delete;
+            fftw_plan_adapter &operator=(fftw_plan_adapter &&) = delete;
+
+            ~fftw_plan_adapter()
+            {
+                if (handle_) {
+                    api_->destroy(handle_);
+                }
+            }
+
+            void execute(const complex_type *input, complex_type *output, bool one_pointer)
+            {
+                if (!input || !output) {
+                    throw exception(
+                        error_code::invalid_pointer, "FFT input and output must be non-null");
+                }
+                if (options_.placement == placement::in_place && !one_pointer) {
+                    throw exception(
+                        error_code::invalid_argument,
+                        "In-place plan must be executed with execute(inout)");
+                }
+                if (options_.placement == placement::out_of_place && one_pointer) {
+                    throw exception(
+                        error_code::invalid_argument,
+                        "Out-of-place plan requires distinct input and output arguments");
+                }
+
+                std::scoped_lock lock(mutex_);
+                std::array<char, 1024> error{};
+                if (api_->execute(
+                        handle_,
+                        // FFTW's new-array API is not const-correct for preserved C2C input.
+                        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+                        const_cast<complex_type *>(input),
+                        output,
+                        error.data(),
+                        error.size())
+                    != 0) {
+                    throw exception(
+                        error_code::execution_failed,
+                        error[0] ? error.data() : "FFTW execution failed");
+                }
+
+                const auto scale = static_cast<Scalar>(detail::normalization_scale(
+                    options_.normalization, direction_, detail::transform_size(lengths_)));
+                if (scale != Scalar{1}) {
+                    for (std::size_t i = 0; i < element_count_; ++i) {
+                        output[i] *= scale;
+                    }
+                }
+            }
+
+        private:
+            std::vector<std::size_t> lengths_;
+            std::size_t batch_count_{};
+            std::size_t element_count_{};
+            syclfft::direction direction_{syclfft::direction::forward};
+            plan_options options_{};
+            const syclfft_host_provider_v1 *api_{};
+            std::shared_ptr<void> module_;
+            void *handle_{};
+            std::mutex mutex_;
+        };
+#endif
 
         template <class Scalar>
         void validate_pointer(
@@ -460,8 +593,7 @@ namespace syclfft
                         "FFTW can only be selected for a SYCL CPU queue");
                 }
                 selected_provider_ = provider::fftw;
-                host_plan_.emplace(
-                    host::plan_many_dft<Scalar>(lengths_, batch_count_, direction_, options_));
+                fftw_plan_.emplace(lengths_, batch_count_, direction_, options_);
 #else
                 throw exception(
                     error_code::provider_unavailable,
@@ -654,11 +786,9 @@ namespace syclfft
                         "Blocking FFTW execution requires host or shared USM");
                 }
                 if (one_pointer) {
-                    host_plan_->execute(reinterpret_cast<std::complex<Scalar> *>(output));
+                    fftw_plan_->execute(output, output, true);
                 } else {
-                    host_plan_->execute(
-                        reinterpret_cast<const std::complex<Scalar> *>(input),
-                        reinterpret_cast<std::complex<Scalar> *>(output));
+                    fftw_plan_->execute(input, output, false);
                 }
                 auto completed =
                     queue_.submit([](sycl::handler &handler) { handler.single_task([]{}); });
@@ -794,7 +924,7 @@ namespace syclfft
         loaded_cufft_provider cufft_;
         void *cufft_handle_{};
 #if defined(SYCLFFT_HAS_FFTW_PROVIDER)
-        std::optional<host::plan<Scalar>> host_plan_;
+        std::optional<fftw_plan_adapter<Scalar>> fftw_plan_;
 #endif
     };
 

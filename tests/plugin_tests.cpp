@@ -1,11 +1,11 @@
 #include <exception>
 #include <iostream>
-#include <syclfft/host.hpp>
+#include <syclfft/detail/provider_loader.hpp>
 
 int main()
 try {
     try {
-        (void)syclfft::host::plan_dft_1d<float>(4, syclfft::direction::forward);
+        (void)syclfft::detail::load_host_provider("syclfft_provider_fftw");
     } catch (const syclfft::exception &ex) {
         if (ex.code() == syclfft::error_code::plugin_error) {
             return 0;

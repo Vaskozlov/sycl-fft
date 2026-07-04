@@ -10,14 +10,11 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(BUILD_SHARED_LIBS "Build shared syclfft libraries" ON)
-option(SYCLFFT_BUILD_HOST "Build the FFTW host API and provider" ON)
-if(APPLE)
-  option(SYCLFFT_BUILD_SYCL "Build the SYCL API" OFF)
-else()
-  option(SYCLFFT_BUILD_SYCL "Build the SYCL API" ON)
-endif()
+option(SYCLFFT_BUILD_SYCL "Build the SYCL API" ON)
 set(SYCLFFT_SYCL_IMPLEMENTATION "AdaptiveCpp" CACHE STRING "AdaptiveCpp or DPCPP")
 set_property(CACHE SYCLFFT_SYCL_IMPLEMENTATION PROPERTY STRINGS AdaptiveCpp DPCPP)
+set(SYCLFFT_FFTW "AUTO" CACHE STRING "Build FFTW provider: AUTO, ON, or OFF")
+set_property(CACHE SYCLFFT_FFTW PROPERTY STRINGS AUTO ON OFF)
 set(SYCLFFT_CUFFT "AUTO" CACHE STRING "Build cuFFT provider: AUTO, ON, or OFF")
 set_property(CACHE SYCLFFT_CUFFT PROPERTY STRINGS AUTO ON OFF)
 option(SYCLFFT_USE_SYSTEM_FFTW "Find FFTW outside Conan-generated package files" OFF)
@@ -60,39 +57,39 @@ else()
 endif()
 set(SYCLFFT_BUILD_PROVIDER_DIR "${CMAKE_BINARY_DIR}/syclfft/providers")
 
-if(SYCLFFT_BUILD_HOST)
+string(TOUPPER "${SYCLFFT_FFTW}" _syclfft_fftw)
+if(_syclfft_fftw STREQUAL "TRUE")
+  set(_syclfft_fftw "ON")
+elseif(_syclfft_fftw STREQUAL "FALSE")
+  set(_syclfft_fftw "OFF")
+elseif(NOT _syclfft_fftw MATCHES "^(AUTO|ON|OFF)$")
+  message(FATAL_ERROR "SYCLFFT_FFTW must be AUTO, ON, or OFF")
+endif()
+
+if(NOT _syclfft_fftw STREQUAL "OFF")
   if(SYCLFFT_USE_SYSTEM_FFTW)
-    find_package(FFTW3 MODULE REQUIRED COMPONENTS FLOAT DOUBLE)
+    find_package(FFTW3 MODULE QUIET COMPONENTS FLOAT DOUBLE)
   else()
-    find_package(FFTW3 CONFIG REQUIRED)
-    if(NOT TARGET FFTW3::fftw3 OR NOT TARGET FFTW3::fftw3f)
-      message(FATAL_ERROR "FFTW3 package must provide FFTW3::fftw3 and FFTW3::fftw3f")
-    endif()
+    find_package(FFTW3 CONFIG QUIET)
   endif()
-
-  add_library(syclfft_host SHARED src/host/host.cpp)
-  add_library(syclfft::host ALIAS syclfft_host)
-  target_link_libraries(syclfft_host PUBLIC syclfft_core)
-  target_compile_features(syclfft_host PUBLIC cxx_std_17)
-  target_compile_definitions(syclfft_host PRIVATE SYCLFFT_BUILDING_HOST)
-  set_target_properties(syclfft_host PROPERTIES
-    EXPORT_NAME host
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0
-  )
-
-  add_library(syclfft_provider_fftw MODULE src/providers/fftw/fftw_provider.cpp)
-  target_link_libraries(syclfft_provider_fftw PRIVATE FFTW3::fftw3 FFTW3::fftw3f)
-  target_include_directories(syclfft_provider_fftw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  set_target_properties(syclfft_provider_fftw PROPERTIES
-    PREFIX ""
-    LIBRARY_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-  )
-  install(TARGETS syclfft_provider_fftw
-    LIBRARY DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-    RUNTIME DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-  )
+  if(TARGET FFTW3::fftw3 AND TARGET FFTW3::fftw3f)
+    add_library(syclfft_provider_fftw MODULE src/providers/fftw/fftw_provider.cpp)
+    target_link_libraries(syclfft_provider_fftw PRIVATE FFTW3::fftw3 FFTW3::fftw3f)
+    target_include_directories(syclfft_provider_fftw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_target_properties(syclfft_provider_fftw PROPERTIES
+      PREFIX ""
+      LIBRARY_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
+      RUNTIME_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
+    )
+    install(TARGETS syclfft_provider_fftw
+      LIBRARY DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
+      RUNTIME DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
+    )
+  elseif(_syclfft_fftw STREQUAL "ON")
+    message(FATAL_ERROR "SYCLFFT_FFTW=ON, but FFTW3::fftw3 and FFTW3::fftw3f were not found")
+  else()
+    message(STATUS "FFTW3 not found; FFTW provider will not be built")
+  endif()
 endif()
 
 if(SYCLFFT_BUILD_SYCL)
@@ -162,8 +159,7 @@ if(SYCLFFT_BUILD_SYCL)
   endif()
 endif()
 
-if(TARGET syclfft_sycl AND TARGET syclfft_host)
-  target_link_libraries(syclfft_sycl PRIVATE syclfft_host)
+if(TARGET syclfft_sycl AND TARGET syclfft_provider_fftw)
   target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_HAS_FFTW_PROVIDER=1)
 endif()
 
@@ -173,12 +169,6 @@ install(TARGETS syclfft_core
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-if(TARGET syclfft_host)
-  install(TARGETS syclfft_host EXPORT syclfftTargets
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-endif()
 if(TARGET syclfft_sycl)
   install(TARGETS syclfft_sycl EXPORT syclfftTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

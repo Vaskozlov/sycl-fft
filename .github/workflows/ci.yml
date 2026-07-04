@@ -41,45 +41,19 @@ jobs:
           -DCMAKE_CXX_COMPILER=clang++
           -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          -DSYCLFFT_BUILD_HOST=ON
           -DSYCLFFT_BUILD_SYCL=OFF
+          -DSYCLFFT_FFTW=ON
           -DSYCLFFT_USE_SYSTEM_FFTW=ON
           -DSYCLFFT_BUILD_TESTS=ON
           -DSYCLFFT_BUILD_EXAMPLES=ON
       - name: Run clang-tidy
         run: run-clang-tidy -p build/tidy -quiet -warnings-as-errors='*'
 
-  macos-host:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v7
-      - run: brew install cmake ninja fftw
-      - name: Configure
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
-          -DSYCLFFT_BUILD_SYCL=OFF
-          -DSYCLFFT_USE_SYSTEM_FFTW=ON
-          -DSYCLFFT_BUILD_TESTS=ON
-      - run: cmake --build build
-      - run: ctest --test-dir build --output-on-failure
-      - run: cmake --install build --prefix "$PWD/install"
-      - name: Test installed host target
-        run: >-
-          cmake -S test_package -B consumer -G Ninja
-          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
-          -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
-          -DSYCLFFT_TEST_HOST=ON
-          -DSYCLFFT_TEST_SYCL=OFF
-      - run: cmake --build consumer
-      - run: ./consumer/test_host
-
   macos-adaptivecpp-cpu:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
-      - run: brew install adaptivecpp cmake llvm ninja
+      - run: brew install adaptivecpp cmake fftw llvm ninja
       - name: Configure
         run: >-
           cmake -S . -B build -G Ninja
@@ -89,13 +63,14 @@ jobs:
           -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"
           -DAdaptiveCpp_DIR="$(brew --prefix adaptivecpp)/lib/cmake/AdaptiveCpp"
           -DACPP_TARGETS=omp
-          -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
+          -DSYCLFFT_FFTW=ON
+          -DSYCLFFT_USE_SYSTEM_FFTW=ON
           -DSYCLFFT_CUFFT=OFF
           -DSYCLFFT_BUILD_TESTS=ON
       - run: cmake --build build
-      - run: ./build/tests/syclfft_sycl_tests
+      - run: ctest --test-dir build --output-on-failure
 
   linux-adaptivecpp-cpu:
     runs-on: ubuntu-24.04
@@ -133,13 +108,13 @@ jobs:
           -DCMAKE_CXX_COMPILER=clang++
           -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
           -DACPP_TARGETS=omp
-          -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
+          -DSYCLFFT_FFTW=OFF
           -DSYCLFFT_CUFFT=OFF
           -DSYCLFFT_BUILD_TESTS=ON
       - run: cmake --build build
-      - run: ./build/tests/syclfft_sycl_tests
+      - run: ctest --test-dir build --output-on-failure
       - run: cmake --install build --prefix "$PWD/install"
       - name: Test installed SYCL target
         run: >-
@@ -147,8 +122,6 @@ jobs:
           -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
           -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
-          -DSYCLFFT_TEST_HOST=OFF
-          -DSYCLFFT_TEST_SYCL=ON
           -DSYCLFFT_TEST_IMPLEMENTATION=AdaptiveCpp
       - run: cmake --build consumer
       - run: ./consumer/test_sycl
@@ -208,9 +181,9 @@ jobs:
           -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER="$HOME/dpcpp/bin/clang"
           -DCMAKE_CXX_COMPILER="$HOME/dpcpp/bin/clang++"
-          -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP
+          -DSYCLFFT_FFTW=OFF
           -DSYCLFFT_CUFFT=OFF
           -DSYCLFFT_BUILD_TESTS=ON
       - run: cmake --build build
@@ -228,69 +201,6 @@ jobs:
         env:
           ONEAPI_DEVICE_SELECTOR: opencl:cpu
         run: ./build/tests/syclfft_sycl_tests
-
-  windows-host:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install Conan
-        run: python -m pip install "conan>=2.20,<3"
-      - name: Build and test host library
-        timeout-minutes: 30
-        shell: cmd
-        run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          conan profile detect --force
-          conan install . -of build/conan ^
-            -s build_type=Release ^
-            -s compiler.cppstd=17 ^
-            -o "&:with_host=True" ^
-            -o "&:with_sycl=False" ^
-            -c tools.cmake.cmaketoolchain:generator=Ninja ^
-            --build=missing
-          cmake -S . -B build/windows-host -G Ninja ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_TOOLCHAIN_FILE=%CD%\build\conan\build\Release\generators\conan_toolchain.cmake ^
-            -DSYCLFFT_BUILD_HOST=ON ^
-            -DSYCLFFT_BUILD_SYCL=OFF ^
-            -DSYCLFFT_BUILD_TESTS=ON
-          cmake --build build/windows-host
-          set "PATH=%CD%\build\windows-host;%PATH%"
-          ctest --test-dir build/windows-host --output-on-failure --timeout 120
-      - name: Build installed host consumer
-        timeout-minutes: 10
-        shell: cmd
-        run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --install build/windows-host --prefix "%CD%\install"
-          cmake -S test_package -B consumer -G Ninja ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -Dsyclfft_DIR=%CD%\install\lib\cmake\syclfft ^
-            -DSYCLFFT_TEST_HOST=ON ^
-            -DSYCLFFT_TEST_SYCL=OFF
-          cmake --build consumer
-      - name: Run installed host consumer
-        timeout-minutes: 3
-        shell: pwsh
-        run: |
-          $env:PATH = "$pwd\install\bin;$env:PATH"
-          $env:SYCLFFT_PLUGIN_PATH = "$pwd\install\bin\syclfft\providers"
-          $env:SYCLFFT_TRACE = "1"
-          Write-Host "Starting installed host consumer"
-          $process = Start-Process `
-            -FilePath "$pwd\consumer\test_host.exe" `
-            -NoNewWindow -PassThru
-          if (-not $process.WaitForExit(120000)) {
-            Stop-Process -Id $process.Id -Force
-            throw "Installed host consumer timed out after 120 seconds"
-          }
-          if ($process.ExitCode -ne 0) {
-            throw "Installed host consumer failed with exit code $($process.ExitCode)"
-          }
-          Write-Host "Installed host consumer passed"
 
   windows-dpcpp-build:
     runs-on: windows-2022
@@ -320,9 +230,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER=%DPCPP_ROOT%\bin\clang.exe ^
             -DCMAKE_CXX_COMPILER=%DPCPP_ROOT%\bin\clang++.exe ^
-            -DSYCLFFT_BUILD_HOST=OFF ^
             -DSYCLFFT_BUILD_SYCL=ON ^
             -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP ^
+            -DSYCLFFT_FFTW=OFF ^
             -DSYCLFFT_CUFFT=OFF ^
             -DSYCLFFT_BUILD_TESTS=ON
           cmake --build build
@@ -353,9 +263,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=%ACPP_ROOT%\bin\clang.exe ^
             -DAdaptiveCpp_DIR=%ACPP_ROOT%\lib\cmake\AdaptiveCpp ^
             -DACPP_TARGETS=omp ^
-            -DSYCLFFT_BUILD_HOST=OFF ^
             -DSYCLFFT_BUILD_SYCL=ON ^
             -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp ^
+            -DSYCLFFT_FFTW=OFF ^
             -DSYCLFFT_CUFFT=OFF ^
             -DSYCLFFT_BUILD_TESTS=ON
           cmake --build build
@@ -385,9 +295,9 @@ jobs:
           -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
           -DCMAKE_C_COMPILER=/opt/dpcpp/bin/clang
           -DCMAKE_CXX_COMPILER=/opt/dpcpp/bin/clang++
-          -DSYCLFFT_BUILD_HOST=OFF
           -DSYCLFFT_BUILD_SYCL=ON
           -DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP
+          -DSYCLFFT_FFTW=OFF
           -DSYCLFFT_CUFFT=ON
           -DSYCLFFT_BUILD_TESTS=OFF
       - run: cmake --build build

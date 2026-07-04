@@ -12,11 +12,6 @@
 #    else
 #        define SYCLFFT_CORE_EXPORT __declspec(dllimport)
 #    endif
-#    if defined(SYCLFFT_BUILDING_HOST)
-#        define SYCLFFT_HOST_EXPORT __declspec(dllexport)
-#    else
-#        define SYCLFFT_HOST_EXPORT __declspec(dllimport)
-#    endif
 #    if defined(SYCLFFT_BUILDING_SYCL)
 #        define SYCLFFT_SYCL_EXPORT __declspec(dllexport)
 #    else
@@ -24,7 +19,6 @@
 #    endif
 #else
 #    define SYCLFFT_CORE_EXPORT __attribute__((visibility("default")))
-#    define SYCLFFT_HOST_EXPORT __attribute__((visibility("default")))
 #    define SYCLFFT_SYCL_EXPORT __attribute__((visibility("default")))
 #endif
 

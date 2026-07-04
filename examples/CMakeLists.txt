@@ -1,8 +1,3 @@
-if(TARGET syclfft_host)
-  add_executable(syclfft_host_example host.cpp)
-  target_link_libraries(syclfft_host_example PRIVATE syclfft::host)
-endif()
-
 if(TARGET syclfft_sycl)
   add_executable(syclfft_sycl_example sycl.cpp)
   target_link_libraries(syclfft_sycl_example PRIVATE syclfft::sycl)
