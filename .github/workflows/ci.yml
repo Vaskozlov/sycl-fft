@@ -99,32 +99,22 @@ jobs:
             -DACPP_COMPILER_FEATURE_PROFILE=none
           cmake --build "$RUNNER_TEMP/acpp-build" --parallel 2
           cmake --install "$RUNNER_TEMP/acpp-build"
-      - name: Configure
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
-          -DCMAKE_C_COMPILER=clang
-          -DCMAKE_CXX_COMPILER=clang++
-          -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
-          -DACPP_TARGETS=omp
-          -DSYCLFFT_BUILD_SYCL=ON
-          -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
-          -DSYCLFFT_FFTW=OFF
-          -DSYCLFFT_CUFFT=OFF
-          -DSYCLFFT_BUILD_TESTS=ON
-      - run: cmake --build build
-      - run: ctest --test-dir build --output-on-failure
-      - run: cmake --install build --prefix "$PWD/install"
-      - name: Test installed SYCL target
-        run: >-
-          cmake -S test_package -B consumer -G Ninja
-          -DCMAKE_CXX_FLAGS=-Werror=c++20-extensions
-          -Dsyclfft_DIR="$PWD/install/lib/cmake/syclfft"
-          -DAdaptiveCpp_DIR="$HOME/adaptivecpp/lib/cmake/AdaptiveCpp"
-          -DSYCLFFT_TEST_IMPLEMENTATION=AdaptiveCpp
-      - run: cmake --build consumer
-      - run: ./consumer/test_sycl
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Build and test the Conan package and installed consumer
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          python -m pip install conan==2.34.0
+          conan profile detect
+          conan create . --no-remote -s compiler.cppstd=17 \
+            -o "syclfft/*:adaptivecpp_root=$HOME/adaptivecpp" \
+            -o 'syclfft/*:acpp_targets=omp' -o 'syclfft/*:build_tests=True' \
+            -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=False' \
+            -c tools.cmake.cmaketoolchain:generator=Ninja \
+            -c 'tools.build:cxxflags=["-Werror=c++20-extensions"]'
 
   linux-dpcpp-opencl:
     runs-on: ubuntu-22.04

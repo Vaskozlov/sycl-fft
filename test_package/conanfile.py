@@ -17,10 +17,20 @@ class SyclFftTestPackage(ConanFile):
     def generate(self):
         dependency = self.dependencies["syclfft"]
         toolchain = CMakeToolchain(self)
-        implementation = dependency.options.get_safe("sycl_implementation", "dpcpp")
-        toolchain.cache_variables["SYCLFFT_TEST_IMPLEMENTATION"] = (
-            "AdaptiveCpp" if str(implementation) == "adaptivecpp" else "DPCPP"
-        )
+        if dependency.options.build_sycl:
+            implementation = dependency.options.sycl_implementation
+            toolchain.cache_variables["SYCLFFT_TEST_IMPLEMENTATION"] = (
+                "AdaptiveCpp" if implementation == "adaptivecpp" else "DPCPP"
+            )
+        paths = {
+            "adaptivecpp_root": "AdaptiveCpp_ROOT",
+            "adaptivecpp_version": "SYCLFFT_EXPECTED_ACPP_VERSION",
+            "acpp_targets": "ACPP_TARGETS",
+        }
+        for option, variable in paths.items():
+            value = dependency.options.get_safe(option)
+            if value:
+                toolchain.cache_variables[variable] = str(value).replace("\\", "/")
         toolchain.generate()
         CMakeDeps(self).generate()
 
@@ -32,4 +42,5 @@ class SyclFftTestPackage(ConanFile):
     def test(self):
         if not can_run(self):
             return
-        self.run(os.path.join(self.cpp.build.bindir, "test_sycl"), env="conanrun")
+        target = "test_sycl" if self.dependencies["syclfft"].options.build_sycl else "test_core"
+        self.run(os.path.join(self.cpp.build.bindir, target), env="conanrun")

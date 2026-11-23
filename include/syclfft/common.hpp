@@ -54,7 +54,8 @@ namespace syclfft
         fftw,
         cufft,
         rocfft,
-        onemkl
+        onemkl,
+        vkfft
     };
 
     struct plan_options

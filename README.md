@@ -12,9 +12,9 @@ Version 0.1 supports:
 - no normalization, forward/backward normalization, and orthogonal normalization;
 - AdaptiveCpp on Linux, Windows, and macOS;
 - Open DPC++ on Linux and Windows;
-- a portable pure-SYCL provider for CPU and OpenCL queues;
+- a portable pure-SYCL provider for CPU, CUDA, and OpenCL queues;
 - an optional runtime-loaded FFTW provider for SYCL CPU queues;
-- an optional runtime-loaded cuFFT provider for CUDA queues.
+- optional runtime-loaded cuFFT and VkFFT providers for CUDA queues.
 
 R2C/C2R, arbitrary strides, split-complex storage, wisdom, and graph-capture
 guarantees are outside the v0.1 scope. Dimensions use C order, so the last
@@ -48,7 +48,9 @@ share its internal scratch. Create multiple plans when transforms must run
 concurrently.
 
 All device pointers must be USM allocations belonging to the plan queue's
-context. The portable provider never copies transform data to the host. This is
+context. Out-of-place input and output must cover disjoint ranges of complex
+elements. Adjacent ranges in one allocation are supported. The portable
+provider never copies transform data to the host. This is
 also the OpenCL path in AdaptiveCpp: kernels operate directly on USM pointers,
 without exposing an OpenCL queue or using `cl_mem` buffers.
 
@@ -61,26 +63,34 @@ complete FFT test suite.
 AdaptiveCpp's OpenMP backend provides the portable CPU execution coverage on
 Linux, Windows, and macOS.
 
-The automatic selection order is:
+A plan defaults to `provider::automatic`. On a CUDA queue it tries cuFFT,
+then VkFFT, then portable SYCL. With driver-only AdaptiveCpp and VkFFT
+enabled, an ordinary CUDA plan therefore selects **VkFFT**. If its module
+or compiler helper is unavailable, or VkFFT rejects the plan, automatic
+selection proceeds to portable SYCL. CPU and OpenCL queues select portable
+SYCL. Explicit provider requests report a failure if that provider cannot
+serve the plan. Select FFTW explicitly for synchronous CPU execution with
+host/shared USM.
 
-- CUDA queue: cuFFT, then portable SYCL;
-- OpenCL or CPU queue: portable SYCL.
-
-An explicit provider request never falls back. Explicit FFTW selection is
-available for SYCL CPU queues with host/shared USM and is synchronous. Inspect
-runtime state with `syclfft::query_providers(queue)`.
+Use `plan.selected_provider()` to inspect the choice for a particular plan.
+`syclfft::query_providers(queue)` reports discovery and queue compatibility.
+Shape support and runtime compiler dependencies are checked during planning.
 
 `syclfft` intentionally does not wrap a standalone host-only FFT API. If an
 application does not need SYCL queues, events, or USM, use FFTW directly.
 
 ## Providers
 
-The portable provider uses global-memory radix-2 and mixed-radix 2/3/5/7
-stages. Other lengths use Bluestein convolution with plan-owned chirp spectra
-and radix-2 convolution FFTs. Multidimensional transforms execute one axis at a
-time using plan-owned USM scratch.
+The portable provider has dedicated 1D radix-2 kernels for 1,024, 2,048 and
+4,096 points. On CPUs each work-item transforms a contiguous batch member.
+On CUDA GPUs with sufficient work-group resources one group transforms each batch
+member in local memory. These kernels write directly to the destination and
+need no global scratch buffers. Other radix-2 transforms and mixed-radix
+2/3/5/7 transforms use global-memory stages. Other lengths use Bluestein
+convolution with plan-owned chirp spectra. Multidimensional transforms execute
+one axis at a time using plan-owned USM scratch.
 
-FFTW and cuFFT live in loadable provider modules. Modules are searched only in:
+FFTW, cuFFT, and VkFFT live in loadable provider modules. Modules are searched only in:
 
 1. directories listed by `SYCLFFT_PLUGIN_PATH`; and
 2. the installed `syclfft/providers` directory beside the core library.
@@ -89,57 +99,87 @@ The working directory is never searched. Missing modules and ABI/dependency
 failures are reported through provider diagnostics. `rocfft` and `onemkl` are
 reserved provider identifiers for future plugins.
 
-VkFFT is not used in v0.1. AdaptiveCpp does not expose the native OpenCL queue
-needed by VkFFT, and VkFFT's OpenCL interface uses `cl_mem` rather than a
-zero-copy USM path.
+### Toolkit-free CUDA with VkFFT
+
+On Linux with driver-only AdaptiveCpp, the optional VkFFT provider creates
+C2C plans for dimensions and batch counts supplied at runtime. During plan
+creation, a small helper beside the plugin translates VkFFT's generated CUDA
+source to PTX through the distribution's shared Clang frontend. The NVIDIA
+driver loads the PTX and executes it on the SYCL queue's CUDA stream. Reuse
+plans to amortize compilation time.
+
+The current provider supports LLVM/Clang 20 on Linux. The local AdaptiveCpp
+installation supplies its compiler configuration. The driver declarations
+come from the fork's `third-party/nvidia/include` directory. On Ubuntu, the
+Conan build requirements reference the LLVM and Clang development packages
+(`llvm-20-dev` and `libclang-20-dev`). A machine running the installed
+package needs the matching `libclang-cpp20`, the LLVM runtime used by
+AdaptiveCpp, and the NVIDIA driver. For shared USM on WSL, the driver-only
+AdaptiveCpp fork includes an allocator fix in commit `a6a8919d`.
+
+For VkFFT transforms with more than one point, input and output addresses
+require 8-byte alignment for FP32 and 16-byte alignment for FP64. Normal
+USM allocations and whole-complex offsets from them satisfy this requirement.
+
+The [C2C benchmark](benchmarks/README.md) measures reusable-plan latency and
+throughput. The [CPU and CUDA review](benchmarks/wsl-review.md) covers batched
+4,096-point accuracy, prime-length transforms and provider timings.
 
 ## Conan 2
 
-Use a profile with C++17 enabled:
+Use Conan 2 with a C++17 profile. AdaptiveCpp is a local toolchain dependency.
+Select an installed copy with `adaptivecpp_root` if it is outside standard
+search paths. Conan resolves the remaining library dependencies. The default
+FFTW dependency is `fftw/3.3.10` from ConanCenter.
+
+For the driver-only CUDA build, export the two repository recipes once into
+your Conan cache. VkFFT's recipe verifies the upstream archive SHA-256.
+The Clang recipe references the distribution's shared frontend.
 
 ```sh
-conan install . -of build/conan -s build_type=Release \
-  -s compiler.cppstd=17 --build=missing
-cmake --preset conan-release
-cmake --build --preset conan-release
-ctest --test-dir build/conan/build/Release --output-on-failure
+conan export recipes/vkfft
+conan export recipes/clang-cpp-system --version=20.1.8
+
+conan create . --build=missing -s compiler.cppstd=17 \
+  -o 'syclfft/*:with_vkfft=True' \
+  -o 'syclfft/*:llvm_version=20.1.8' \
+  -o 'syclfft/*:adaptivecpp_root=/path/to/installed/acpp' \
+  -o 'syclfft/*:cuda_driver_include_dir=/path/to/AdaptiveCpp/third-party/nvidia/include' \
+  -o 'syclfft/*:acpp_targets=generic' \
+  -o 'syclfft/*:build_tests=True'
 ```
 
-Conan options are:
+This also builds the default FFTW plugin for CPU use. Set
+`-o 'syclfft/*:with_fftw=False'` to omit it. The optional VkFFT build uses
+the declared Clang release and checks it against AdaptiveCpp. The CUDA
+Toolkit is required only when building the separate cuFFT plugin.
 
-- `sycl_implementation=adaptivecpp|dpcpp`;
-- `with_fftw=True|False`;
-- `use_system_fftw=True|False`;
-- `with_cufft=auto|True|False`.
+For development, use `conan build . --build=missing` with the same profile
+and options. A downstream Conan recipe can require `syclfft/0.1.0`. Its
+CMake project can then use `find_package(syclfft CONFIG REQUIRED)` and
+link `syclfft::sycl`. AdaptiveCpp consumers apply `add_sycl_to_target` to
+their own SYCL sources. The [consumer test](test_package/CMakeLists.txt)
+shows the complete target setup. Core-only builds expose `syclfft::core`.
 
-The default dependency is `fftw/3.3.10`, built static with single and double
-precision only when `with_fftw=True`. CUDA is never fetched by Conan.
-`with_cufft=auto` builds the plugin only when CMake finds an installed CUDA
-Toolkit; `True` requires it.
+| Conan option | What it controls |
+| --- | --- |
+| `build_sycl`, `build_tests`, `build_examples`, `build_benchmarks` | Build the public SYCL library, tests, examples, and benchmark. Defaults are `True`, `False`, `True`, and `False`. |
+| `sycl_implementation` | `adaptivecpp` or `dpcpp`. Select the host compiler through the normal Conan profile. |
+| `adaptivecpp_root`, `adaptivecpp_version`, `acpp_targets` | Local AdaptiveCpp installation prefix, optional exact version, and compilation targets such as `generic` or `omp`. |
+| `with_vkfft`, `llvm_version` | Opt into VkFFT and select its exact system Clang/LLVM release (default `20.1.8`). |
+| `cuda_driver_include_dir`, `llvm_dir`, `clang_dir` | Location of the standalone driver header and optional paths to the LLVM and Clang CMake package directories. |
+| `with_fftw`, `fftw_version`, `use_system_fftw`, `fftw_root` | FFTW provider, exact release, system-library selection, and optional installation prefix. Both float and double libraries are required. |
+| `with_cufft`, `cuda_toolkit_version`, `cuda_toolkit_root` | cuFFT plugin and its exact toolkit version and optional prefix. `auto` enables cuFFT when a toolkit version is specified and VkFFT is disabled. `True` explicitly requests cuFFT. |
 
-For AdaptiveCpp, make its CMake package discoverable, for example:
+For system FFTW, export `recipes/fftw-system` with the installed version,
+then set `use_system_fftw=True` and `fftw_version` to that version. For
+the cuFFT plugin, export `recipes/cuda-toolkit-system` with the exact installed
+toolkit version and set `cuda_toolkit_version` accordingly. For example:
 
 ```sh
-cmake -S . -B build -G Ninja \
-  -DAdaptiveCpp_DIR=/opt/homebrew/opt/adaptivecpp/lib/cmake/AdaptiveCpp \
-  -DACPP_TARGETS=omp \
-  -DSYCLFFT_BUILD_SYCL=ON -DSYCLFFT_SYCL_IMPLEMENTATION=AdaptiveCpp
+conan export recipes/fftw-system --version=3.3.10
+conan export recipes/cuda-toolkit-system --version=13.5.37
 ```
-
-For Open DPC++, configure with `icpx`/`dpcpp` and
-`-DSYCLFFT_SYCL_IMPLEMENTATION=DPCPP`.
-
-System FFTW mode requires both `fftw3` and `fftw3f`:
-
-```sh
-cmake -S . -B build -DSYCLFFT_FFTW=ON -DSYCLFFT_USE_SYSTEM_FFTW=ON
-```
-
-Set `FFTW3_ROOT` when the installation is outside normal CMake or pkg-config
-search paths.
-
-The installed public CMake target and matching Conan component is
-`syclfft::sycl` (plus the internal shared `syclfft::core`).
 
 ## Continuous integration
 

@@ -1,18 +1,29 @@
+#include <algorithm>
+#include <iostream>
 #include <syclfft/syclfft.hpp>
 
 int main()
 {
+    using complex = syclfft::complex<float>;
+    constexpr std::size_t length = 4;
     sycl::queue queue;
-    auto *data = sycl::malloc_shared<syclfft::complex<float>>(4, queue);
-    data[0] = {1.0f, 0.0f};
-    for (int i = 1; i < 4; ++i) {
-        data[i] = {0.0f, 0.0f};
+    auto *data = sycl::malloc_shared<complex>(length, queue);
+    if (!data) {
+        return 1;
     }
+    std::fill_n(data, length, complex{});
+    data[0] = {1.0f, 0.0f};
+
     syclfft::plan_options options;
     options.placement = syclfft::placement::in_place;
-    auto plan = syclfft::plan_dft_1d<float>(queue, 4, syclfft::direction::forward, options);
+    auto plan = syclfft::plan_dft_1d<float>(queue, length, syclfft::direction::forward, options);
     plan.execute(data).wait_and_throw();
-    const bool correct = data[0].real() == 1.0f && data[0].imag() == 0.0f;
+    std::cout << "Automatic provider: " << syclfft::detail::provider_name(plan.selected_provider())
+              << '\n';
+    const bool correct = std::all_of(data, data + length, [](const auto &value) {
+        return value.real() == 1.0f && value.imag() == 0.0f;
+    });
     sycl::free(data, queue);
+    queue.wait_and_throw();
     return correct ? 0 : 1;
 }

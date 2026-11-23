@@ -11,3 +11,8 @@ third_party/syclcplx/LLVM-EXCEPTION.txt.
 The optional FFTW provider links to FFTW, which is licensed under GPL-2.0 or
 later. Distributing a binary containing that provider may impose GPL
 obligations. The Apache-2.0 core and SYCL provider do not contain FFTW code.
+
+The optional VkFFT provider incorporates VkFFT v1.3.4 (MIT license,
+Copyright 2020 - present Dmitrii Tolmachev) and its compiler helper dynamically links the system Clang frontend
+(Apache-2.0 WITH LLVM-exception, LLVM contributors). The packaged license
+texts accompany the provider installation.

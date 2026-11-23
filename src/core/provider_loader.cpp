@@ -159,6 +159,8 @@ namespace syclfft::detail
             return "cufft";
         case provider::rocfft:
             return "rocfft";
+        case provider::vkfft:
+            return "vkfft";
         case provider::onemkl:
             return "onemkl";
         }
