@@ -1,0 +1,18 @@
+# Native Debian/Ubuntu toolchain. Use the exact release from llvm-config-N --version.
+{% set release = os.environ["ACPP_LLVM_VERSION"] %}
+{% set major = release.split(".")[0] %}
+include(default)
+
+[settings]
+os=Linux
+compiler=clang
+compiler.version={{ major }}
+compiler.cppstd=17
+compiler.libcxx=libstdc++11
+
+[options]
+adaptivecpp/*:llvm_version={{ release }}
+
+[conf]
+tools.build:compiler_executables={"c":"clang-{{ major }}","cpp":"clang++-{{ major }}"}
+tools.cmake.cmaketoolchain:generator=Ninja

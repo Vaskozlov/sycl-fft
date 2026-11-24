@@ -1,15 +1,13 @@
 # C2C benchmarks
 
-Build the benchmark with Conan. Export the optional provider recipes once as
-described in the [build instructions](../README.md#conan-2). Use the same
-`llvm_version` for the driver-only AdaptiveCpp CUDA benchmark build.
+Build the benchmark using the local recipes and AdaptiveCpp profile from the
+[build instructions](../README.md#local-adaptivecpp-and-vkfft). The profile
+selects AdaptiveCpp's LLVM release.
 
 ```sh
-conan build . --build=missing -s build_type=Release -s compiler.cppstd=17 \
+conan build . --no-remote --build=missing -pr:a ./profiles/linux-adaptivecpp -s build_type=Release \
   -o 'syclfft/*:build_benchmarks=True' -o 'syclfft/*:with_vkfft=True' \
-  -o "syclfft/*:llvm_version=$llvm_version" \
-  -o 'syclfft/*:adaptivecpp_root=/path/to/acpp' -o 'syclfft/*:acpp_targets=generic' \
-  -o 'syclfft/*:cuda_driver_include_dir=/path/to/AdaptiveCpp/third-party/nvidia/include'
+  -o 'syclfft/*:with_fftw=False'
 export SYCLFFT_PLUGIN_PATH="$PWD/build/Release/syclfft/providers"
 build/Release/benchmarks/syclfft_benchmark cuda automatic float 4096 256 21 8
 build/Release/benchmarks/syclfft_benchmark cuda portable_sycl float 4096 256 21 8

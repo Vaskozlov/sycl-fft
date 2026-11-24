@@ -23,8 +23,6 @@ class SyclFftConan(ConanFile):
         "build_examples": [True, False],
         "build_benchmarks": [True, False],
         "sycl_implementation": ["adaptivecpp", "dpcpp"],
-        "adaptivecpp_root": [None, "ANY"],
-        "adaptivecpp_version": [None, "ANY"],
         "acpp_targets": [None, "ANY"],
         "with_fftw": [True, False],
         "use_system_fftw": [True, False],
@@ -34,10 +32,6 @@ class SyclFftConan(ConanFile):
         "cuda_toolkit_version": [None, "ANY"],
         "cuda_toolkit_root": [None, "ANY"],
         "with_vkfft": [True, False],
-        "llvm_version": [None, "ANY"],
-        "llvm_dir": [None, "ANY"],
-        "clang_dir": [None, "ANY"],
-        "cuda_driver_include_dir": [None, "ANY"],
     }
     default_options = {
         "build_sycl": True,
@@ -45,9 +39,7 @@ class SyclFftConan(ConanFile):
         "build_examples": True,
         "build_benchmarks": False,
         "sycl_implementation": "adaptivecpp",
-        "adaptivecpp_root": None,
-        "adaptivecpp_version": None,
-        "acpp_targets": None,
+        "acpp_targets": "generic",
         "with_fftw": True,
         "use_system_fftw": False,
         "fftw_version": "3.3.10",
@@ -56,10 +48,6 @@ class SyclFftConan(ConanFile):
         "cuda_toolkit_version": None,
         "cuda_toolkit_root": None,
         "with_vkfft": False,
-        "llvm_version": None,
-        "llvm_dir": None,
-        "clang_dir": None,
-        "cuda_driver_include_dir": None,
         "fftw/*:shared": False,
         "fftw/*:precision_single": True,
         "fftw/*:precision_double": True,
@@ -86,19 +74,22 @@ class SyclFftConan(ConanFile):
         if not self._with_cufft:
             self.options.rm_safe("cuda_toolkit_root")
             self.options.rm_safe("cuda_toolkit_version")
-        if not self.options.with_vkfft:
-            self.options.rm_safe("llvm_version")
-            self.options.rm_safe("llvm_dir")
-            self.options.rm_safe("clang_dir")
-            self.options.rm_safe("cuda_driver_include_dir")
         if not self._with_adaptivecpp:
-            self.options.rm_safe("adaptivecpp_root")
-            self.options.rm_safe("adaptivecpp_version")
             self.options.rm_safe("acpp_targets")
 
     @property
     def _with_adaptivecpp(self):
         return self.options.build_sycl and self.options.sycl_implementation == "adaptivecpp"
+
+    @property
+    def _adaptivecpp_ref(self):
+        if self.settings.os == "Windows":
+            return "adaptivecpp-llvm/25.10.0-llvm19.1.7"
+        return "adaptivecpp/25.10.0"
+
+    @property
+    def _adaptivecpp_dependency(self):
+        return self.dependencies[self._adaptivecpp_ref.split("/", 1)[0]]
 
     @property
     def _with_cufft(self):
@@ -109,6 +100,9 @@ class SyclFftConan(ConanFile):
         return bool(self.options.with_cufft)
 
     def requirements(self):
+        if self._with_adaptivecpp:
+            self.requires(self._adaptivecpp_ref, package_id_mode="full_mode",
+                          transitive_headers=True, transitive_libs=True)
         if self.options.with_fftw:
             version = self.options.fftw_version
             if self.options.use_system_fftw:
@@ -120,22 +114,17 @@ class SyclFftConan(ConanFile):
             self.requires(f"cuda-toolkit-system/{self.options.cuda_toolkit_version}",
                           headers=False, libs=False, run=True, package_id_mode="full_mode")
         if self.options.with_vkfft:
-            version = str(self.options.llvm_version)
-            if not re.fullmatch(r"(?:1[5-9]|2[01])\.\d+\.\d+", version):
-                raise ConanInvalidConfiguration(
-                    "Set llvm_version to AdaptiveCpp's exact LLVM release "
-                    "(major 15 through 21), e.g. -o 'syclfft/*:llvm_version=19.1.7'"
-                )
+            if self.settings.os != "Linux" or not self._with_adaptivecpp:
+                raise ConanInvalidConfiguration("with_vkfft requires Linux and AdaptiveCpp SYCL")
             self.requires("vkfft-driver/1.3.4", transitive_headers=False, package_id_mode="full_mode")
-            self.requires(f"clang-cpp-system/{version}",
-                          headers=False, libs=False, run=True, package_id_mode="full_mode")
 
     def build_requirements(self):
         # Development packages belong only to machines building syclfft from source.
         if cross_building(self):
             # Cross profiles supply target development files through their sysroot.
             return
-        if self.options.with_vkfft:
+        if self._with_adaptivecpp and self.settings.os == "Linux":
+            # Both the SYCL compiler and VkFFT need the development toolchain when building.
             self.tool_requires("clang-cpp-system/<host_version>",
                                options={"development": True})
         if self.options.get_safe("use_system_fftw"):
@@ -155,14 +144,14 @@ class SyclFftConan(ConanFile):
             if not re.fullmatch(r"\d+\.\d+\.\d+", str(self.options.get_safe("cuda_toolkit_version"))):
                 raise ConanInvalidConfiguration("with_cufft requires an exact cuda_toolkit_version")
         if self.options.with_vkfft:
-            if self.settings.os != "Linux" or not self._with_adaptivecpp:
-                raise ConanInvalidConfiguration("with_vkfft requires Linux and AdaptiveCpp SYCL")
             if cross_building(self):
                 raise ConanInvalidConfiguration("with_vkfft requires a native build")
+            if not self._adaptivecpp_dependency.options.with_cuda:
+                raise ConanInvalidConfiguration("with_vkfft requires adaptivecpp/*:with_cuda=True")
 
     def package_id(self):
         # These paths select installations of versions already declared in the graph.
-        for path in ("fftw_root", "cuda_toolkit_root", "llvm_dir", "clang_dir"):
+        for path in ("fftw_root", "cuda_toolkit_root"):
             self.info.options.rm_safe(path)
 
     def layout(self):
@@ -170,12 +159,8 @@ class SyclFftConan(ConanFile):
 
     def _set_package_locations(self, cache):
         paths = {
-            "adaptivecpp_root": "AdaptiveCpp_ROOT",
             "fftw_root": "FFTW3_ROOT",
             "cuda_toolkit_root": "CUDAToolkit_ROOT",
-            "llvm_dir": "LLVM_DIR",
-            "clang_dir": "Clang_DIR",
-            "cuda_driver_include_dir": "SYCLFFT_CUDA_DRIVER_INCLUDE_DIR",
         }
         for option, variable in paths.items():
             value = self.options.get_safe(option)
@@ -186,25 +171,25 @@ class SyclFftConan(ConanFile):
         CMakeDeps(self).generate()
         toolchain = CMakeToolchain(self)
         cache = toolchain.cache_variables
-        cache["BUILD_SHARED_LIBS"] = True
-        cache["SYCLFFT_BUILD_SYCL"] = bool(self.options.build_sycl)
-        cache["SYCLFFT_BUILD_TESTS"] = bool(self.options.build_tests)
-        cache["SYCLFFT_BUILD_EXAMPLES"] = bool(self.options.build_examples)
-        cache["SYCLFFT_BUILD_BENCHMARKS"] = bool(self.options.build_benchmarks)
-        cache["SYCLFFT_FFTW"] = "ON" if self.options.with_fftw else "OFF"
-        cache["SYCLFFT_USE_SYSTEM_FFTW"] = bool(self.options.get_safe("use_system_fftw"))
-        cache["SYCLFFT_SYCL_IMPLEMENTATION"] = (
-            "AdaptiveCpp" if self._with_adaptivecpp else "DPCPP"
-        )
-        cache["SYCLFFT_CUFFT"] = "ON" if self._with_cufft else "OFF"
-        cache["SYCLFFT_VKFFT"] = bool(self.options.with_vkfft)
+        cache.update({
+            "BUILD_SHARED_LIBS": True,
+            "SYCLFFT_BUILD_SYCL": bool(self.options.build_sycl),
+            "SYCLFFT_BUILD_TESTS": bool(self.options.build_tests),
+            "SYCLFFT_BUILD_EXAMPLES": bool(self.options.build_examples),
+            "SYCLFFT_BUILD_BENCHMARKS": bool(self.options.build_benchmarks),
+            "SYCLFFT_FFTW": "ON" if self.options.with_fftw else "OFF",
+            "SYCLFFT_USE_SYSTEM_FFTW": bool(self.options.get_safe("use_system_fftw")),
+            "SYCLFFT_SYCL_IMPLEMENTATION": "AdaptiveCpp" if self._with_adaptivecpp else "DPCPP",
+            "SYCLFFT_CUFFT": "ON" if self._with_cufft else "OFF",
+            "SYCLFFT_VKFFT": bool(self.options.with_vkfft),
+        })
 
         self._set_package_locations(cache)
         if self._with_adaptivecpp:
-            if self.options.adaptivecpp_version:
-                cache["SYCLFFT_EXPECTED_ACPP_VERSION"] = str(self.options.adaptivecpp_version)
-            if self.options.acpp_targets:
-                cache["ACPP_TARGETS"] = str(self.options.acpp_targets)
+            builddirs = self._adaptivecpp_dependency.cpp_info.builddirs
+            cache["AdaptiveCpp_DIR"] = builddirs[0].replace("\\", "/")
+        if self.options.get_safe("acpp_targets"):
+            cache["ACPP_TARGETS"] = str(self.options.acpp_targets)
         if self.options.get_safe("use_system_fftw"):
             cache["SYCLFFT_EXPECTED_FFTW_VERSION"] = str(self.dependencies["fftw-system"].ref.version)
         if self._with_cufft:
@@ -212,7 +197,6 @@ class SyclFftConan(ConanFile):
                 self.dependencies["cuda-toolkit-system"].ref.version
             )
         if self.options.with_vkfft:
-            cache["SYCLFFT_EXPECTED_LLVM_VERSION"] = str(self.dependencies["clang-cpp-system"].ref.version)
             cache["SYCLFFT_VKFFT_INCLUDE_DIR"] = self.dependencies["vkfft-driver"].cpp_info.includedirs[0]
         toolchain.generate()
 

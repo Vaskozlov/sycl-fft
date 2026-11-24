@@ -1,5 +1,23 @@
 @PACKAGE_INIT@
 
+set(_syclfft_adaptivecpp_version "@SYCLFFT_PACKAGE_ADAPTIVECPP_VERSION@")
+if(_syclfft_adaptivecpp_version)
+  if(NOT TARGET AdaptiveCpp::acpp-rt)
+    if(NOT AdaptiveCpp_DIR AND CMAKE_PREFIX_PATH)
+      # Conan's CMakeToolchain adds the selected native config directory here.
+      find_path(AdaptiveCpp_DIR NAMES AdaptiveCppConfig.cmake adaptivecpp-config.cmake
+        PATHS ${CMAKE_PREFIX_PATH} NO_DEFAULT_PATH NO_CACHE)
+    endif()
+    include(CMakeFindDependencyMacro)
+    find_dependency(AdaptiveCpp "${_syclfft_adaptivecpp_version}" EXACT CONFIG)
+  elseif(NOT AdaptiveCpp_VERSION VERSION_EQUAL _syclfft_adaptivecpp_version)
+    set(syclfft_FOUND FALSE)
+    set(syclfft_NOT_FOUND_MESSAGE "syclfft requires AdaptiveCpp ${_syclfft_adaptivecpp_version}, found ${AdaptiveCpp_VERSION}")
+    return()
+  endif()
+endif()
+unset(_syclfft_adaptivecpp_version)
+
 include("${CMAKE_CURRENT_LIST_DIR}/syclfftTargets.cmake")
 
 set(syclfft_core_FOUND FALSE)

@@ -1,0 +1,28 @@
+# Open-source Intel DPC++ 6.3.0 Linux x86-64 release.
+# Set DPCPP_ROOT to the unpacked SDK directory.
+{% set sdk = os.path.abspath(os.environ["DPCPP_ROOT"].strip()) %}
+
+[settings]
+os=Linux
+arch=x86_64
+compiler=clang
+compiler.version=21
+compiler.cppstd=17
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[options]
+syclfft/*:sycl_implementation=dpcpp
+
+[conf]
+tools.build:compiler_executables={"c":{{ (sdk + "/bin/clang") | tojson }},"cpp":{{ (sdk + "/bin/clang++") | tojson }}}
+tools.cmake.cmaketoolchain:generator=Ninja
+user.syclfft:dpcpp_release=6.3.0
+syclfft/*:tools.info.package_id:confs=["user.syclfft:dpcpp_release"]
+
+[buildenv]
+PATH=+(path){{ sdk }}/bin
+LD_LIBRARY_PATH=+(path){{ sdk }}/lib
+
+[runenv]
+LD_LIBRARY_PATH=+(path){{ sdk }}/lib

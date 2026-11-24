@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ACPP_VERSION: "25.10.0"
+  ACPP_CONAN_REVISION: "59c6d47d6ea9c3600e6f6d3f4dfe4c8e08133d0f"
   DPCPP_VERSION: "6.3.0"
 
 jobs:
@@ -76,45 +76,38 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Vaskozlov/AdaptiveCpp
+          ref: ${{ env.ACPP_CONAN_REVISION }}
+          path: adaptivecpp-source
       - name: Install build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          clang cmake ninja-build git libomp-dev python3
+          clang-18 llvm-18-dev libclang-18-dev lld-18 libomp-18-dev
+          cmake ninja-build
           libboost-context-dev libboost-fiber-dev libboost-test-dev
-      - uses: actions/cache@v5
-        id: cache-acpp
-        with:
-          path: ~/adaptivecpp
-          key: adaptivecpp-${{ runner.os }}-${{ env.ACPP_VERSION }}-clang-omp-v2
-      - name: Build AdaptiveCpp
-        if: steps.cache-acpp.outputs.cache-hit != 'true'
-        run: |
-          git clone --branch "v${ACPP_VERSION}" --depth 1 \
-            https://github.com/AdaptiveCpp/AdaptiveCpp.git "$RUNNER_TEMP/AdaptiveCpp"
-          cmake -S "$RUNNER_TEMP/AdaptiveCpp" -B "$RUNNER_TEMP/acpp-build" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_INSTALL_PREFIX="$HOME/adaptivecpp" \
-            -DACPP_COMPILER_FEATURE_PROFILE=none
-          cmake --build "$RUNNER_TEMP/acpp-build" --parallel 2
-          cmake --install "$RUNNER_TEMP/acpp-build"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Build and test the Conan package and installed consumer
         env:
-          CC: clang
-          CXX: clang++
+          CC: clang-18
+          CXX: clang++-18
         run: |
           python -m pip install conan==2.34.0
+          export ACPP_LLVM_VERSION=$(/usr/lib/llvm-18/bin/llvm-config --version)
           conan profile detect
-          conan create . --no-remote -s compiler.cppstd=17 \
-            -o "syclfft/*:adaptivecpp_root=$HOME/adaptivecpp" \
-            -o 'syclfft/*:acpp_targets=omp' -o 'syclfft/*:build_tests=True' \
+          conan export adaptivecpp-source/recipes/clang-cpp-system --version="$ACPP_LLVM_VERSION"
+          conan export recipes/vkfft
+          conan create adaptivecpp-source --no-remote --build=missing \
+            -pr:a profiles/linux-adaptivecpp -c:a tools.build:jobs=2
+          conan create . --no-remote --build=missing \
+            -pr:a profiles/linux-adaptivecpp -c:a tools.build:jobs=2 \
+            -c:h 'syclfft/*:tools.build:cxxflags=["-Werror=c++20-extensions"]' \
+            -o 'syclfft/*:with_vkfft=True' -o 'syclfft/*:build_tests=True' \
             -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=False' \
-            -c tools.cmake.cmaketoolchain:generator=Ninja \
-            -c 'tools.build:cxxflags=["-Werror=c++20-extensions"]'
+            -o 'syclfft/*:acpp_targets=omp'
 
   linux-dpcpp-opencl:
     runs-on: ubuntu-22.04
