@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  ACPP_CONAN_REVISION: "59c6d47d6ea9c3600e6f6d3f4dfe4c8e08133d0f"
+  ACPP_CONAN_REVISION: "7672bae5462c7b84792c43340b0ba5dea28984a1"
   DPCPP_VERSION: "6.3.0"
 
 jobs:
@@ -96,14 +96,13 @@ jobs:
           CXX: clang++-18
         run: |
           python -m pip install conan==2.34.0
-          export ACPP_LLVM_VERSION=$(/usr/lib/llvm-18/bin/llvm-config --version)
           conan profile detect
-          conan export adaptivecpp-source/recipes/clang-cpp-system --version="$ACPP_LLVM_VERSION"
+          conan export adaptivecpp-source/recipes/clang-cpp-system --version="$(llvm-config-18 --version)"
           conan export recipes/vkfft
           conan create adaptivecpp-source --no-remote --build=missing \
-            -pr:a profiles/linux-adaptivecpp -c:a tools.build:jobs=2
+            -s compiler.cppstd=17 -c:a tools.build:jobs=2
           conan create . --no-remote --build=missing \
-            -pr:a profiles/linux-adaptivecpp -c:a tools.build:jobs=2 \
+            -s compiler.cppstd=17 -c:a tools.build:jobs=2 \
             -c:h 'syclfft/*:tools.build:cxxflags=["-Werror=c++20-extensions"]' \
             -o 'syclfft/*:with_vkfft=True' -o 'syclfft/*:build_tests=True' \
             -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=False' \

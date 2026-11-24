@@ -82,14 +82,12 @@ class SyclFftConan(ConanFile):
         return self.options.build_sycl and self.options.sycl_implementation == "adaptivecpp"
 
     @property
-    def _adaptivecpp_ref(self):
-        if self.settings.os == "Windows":
-            return "adaptivecpp-llvm/25.10.0-llvm19.1.7"
-        return "adaptivecpp/25.10.0"
+    def _adaptivecpp_package(self):
+        return "adaptivecpp-llvm" if self.settings.os == "Windows" else "adaptivecpp"
 
     @property
     def _adaptivecpp_dependency(self):
-        return self.dependencies[self._adaptivecpp_ref.split("/", 1)[0]]
+        return self.dependencies[self._adaptivecpp_package]
 
     @property
     def _with_cufft(self):
@@ -101,7 +99,9 @@ class SyclFftConan(ConanFile):
 
     def requirements(self):
         if self._with_adaptivecpp:
-            self.requires(self._adaptivecpp_ref, package_id_mode="full_mode",
+            # The Windows SDK encodes its LLVM release as a version suffix.
+            versions = "[*, include_prerelease]" if self.settings.os == "Windows" else "[*]"
+            self.requires(f"{self._adaptivecpp_package}/{versions}", package_id_mode="full_mode",
                           transitive_headers=True, transitive_libs=True)
         if self.options.with_fftw:
             version = self.options.fftw_version
@@ -146,7 +146,7 @@ class SyclFftConan(ConanFile):
         if self.options.with_vkfft:
             if cross_building(self):
                 raise ConanInvalidConfiguration("with_vkfft requires a native build")
-            if not self._adaptivecpp_dependency.options.with_cuda:
+            if not self._adaptivecpp_dependency.options.get_safe("with_cuda"):
                 raise ConanInvalidConfiguration("with_vkfft requires adaptivecpp/*:with_cuda=True")
 
     def package_id(self):

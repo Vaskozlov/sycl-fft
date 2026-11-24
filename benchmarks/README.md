@@ -1,11 +1,10 @@
 # C2C benchmarks
 
-Build the benchmark using the local recipes and AdaptiveCpp profile from the
-[build instructions](../README.md#local-adaptivecpp-and-vkfft). The profile
-selects AdaptiveCpp's LLVM release.
+Export the local recipes from the [build instructions](../README.md#local-adaptivecpp-and-vkfft),
+then enable the benchmark in a Release build.
 
 ```sh
-conan build . --no-remote --build=missing -pr:a ./profiles/linux-adaptivecpp -s build_type=Release \
+conan build . --no-remote --build=missing -s compiler.cppstd=17 -s build_type=Release \
   -o 'syclfft/*:build_benchmarks=True' -o 'syclfft/*:with_vkfft=True' \
   -o 'syclfft/*:with_fftw=False'
 export SYCLFFT_PLUGIN_PATH="$PWD/build/Release/syclfft/providers"

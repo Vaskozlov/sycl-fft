@@ -1,18 +1,22 @@
-# Native Debian/Ubuntu toolchain. Use the exact release from llvm-config-N --version.
-{% set release = os.environ["ACPP_LLVM_VERSION"] %}
-{% set major = release.split(".")[0] %}
+# Set ACPP_LLVM_VERSION to use that distro Clang as the host compiler too.
 include(default)
 
-[settings]
-os=Linux
-compiler=clang
-compiler.version={{ major }}
-compiler.cppstd=17
-compiler.libcxx=libstdc++11
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
+{% set release = os.getenv("ACPP_LLVM_VERSION") %}
+{% if release %}
+{% set major = release.split(".")[0] %}
+tools.build:compiler_executables={"c":"clang-{{ major }}","cpp":"clang++-{{ major }}"}
 
 [options]
 adaptivecpp/*:llvm_version={{ release }}
+{% endif %}
 
-[conf]
-tools.build:compiler_executables={"c":"clang-{{ major }}","cpp":"clang++-{{ major }}"}
-tools.cmake.cmaketoolchain:generator=Ninja
+[settings]
+os=Linux
+compiler.cppstd=17
+{% if release %}
+compiler=clang
+compiler.version={{ major }}
+compiler.libcxx=libstdc++11
+{% endif %}
