@@ -108,14 +108,14 @@ source to PTX through the distribution's shared Clang frontend. The NVIDIA
 driver loads the PTX and executes it on the SYCL queue's CUDA stream. Reuse
 plans to amortize compilation time.
 
-The current provider supports LLVM/Clang 20 on Linux. The local AdaptiveCpp
-installation supplies its compiler configuration. The driver declarations
-come from the fork's `third-party/nvidia/include` directory. On Ubuntu, the
-Conan build requirements reference the LLVM and Clang development packages
-(`llvm-20-dev` and `libclang-20-dev`). A machine running the installed
-package needs the matching `libclang-cpp20`, the LLVM runtime used by
-AdaptiveCpp, and the NVIDIA driver. For shared USM on WSL, the driver-only
-AdaptiveCpp fork includes an allocator fix in commit `a6a8919d`.
+The Linux provider supports LLVM/Clang 15 through 21. Select the exact
+release used to build AdaptiveCpp. The CUDA driver declarations come from
+the fork's `third-party/nvidia/include` directory. Conan references the
+distribution's Clang and LLVM development packages for the build. Deployment
+requires their matching shared runtimes and the NVIDIA driver. If the selected
+LLVM cannot emit code for the GPU architecture, automatic selection falls
+back to portable SYCL. For shared USM on WSL, the driver-only AdaptiveCpp
+fork includes an allocator fix in commit `a6a8919d`.
 
 For VkFFT transforms with more than one point, input and output addresses
 require 8-byte alignment for FP32 and 16-byte alignment for FP64. Normal
@@ -132,17 +132,20 @@ Select an installed copy with `adaptivecpp_root` if it is outside standard
 search paths. Conan resolves the remaining library dependencies. The default
 FFTW dependency is `fftw/3.3.10` from ConanCenter.
 
-For the driver-only CUDA build, export the two repository recipes once into
-your Conan cache. VkFFT's recipe verifies the upstream archive SHA-256.
-The Clang recipe references the distribution's shared frontend.
+For the driver-only CUDA build, export the two repository recipes into
+your Conan cache. Conan downloads VkFFT and checks the upstream archive's
+SHA-256. The Clang recipe references the distribution's shared frontend.
+Run the `llvm-config` from AdaptiveCpp's LLVM installation to get its release.
+The example below uses the Debian/Ubuntu layout for LLVM 19.
 
 ```sh
+llvm_version=$(/usr/lib/llvm-19/bin/llvm-config --version)
 conan export recipes/vkfft
-conan export recipes/clang-cpp-system --version=20.1.8
+conan export recipes/clang-cpp-system --version="$llvm_version"
 
 conan create . --build=missing -s compiler.cppstd=17 \
   -o 'syclfft/*:with_vkfft=True' \
-  -o 'syclfft/*:llvm_version=20.1.8' \
+  -o "syclfft/*:llvm_version=$llvm_version" \
   -o 'syclfft/*:adaptivecpp_root=/path/to/installed/acpp' \
   -o 'syclfft/*:cuda_driver_include_dir=/path/to/AdaptiveCpp/third-party/nvidia/include' \
   -o 'syclfft/*:acpp_targets=generic' \
@@ -166,7 +169,7 @@ shows the complete target setup. Core-only builds expose `syclfft::core`.
 | `build_sycl`, `build_tests`, `build_examples`, `build_benchmarks` | Build the public SYCL library, tests, examples, and benchmark. Defaults are `True`, `False`, `True`, and `False`. |
 | `sycl_implementation` | `adaptivecpp` or `dpcpp`. Select the host compiler through the normal Conan profile. |
 | `adaptivecpp_root`, `adaptivecpp_version`, `acpp_targets` | Local AdaptiveCpp installation prefix, optional exact version, and compilation targets such as `generic` or `omp`. |
-| `with_vkfft`, `llvm_version` | Opt into VkFFT and select its exact system Clang/LLVM release (default `20.1.8`). |
+| `with_vkfft`, `llvm_version` | VkFFT is opt-in. Enabling it requires the exact Clang/LLVM release used by AdaptiveCpp (major 15–21). |
 | `cuda_driver_include_dir`, `llvm_dir`, `clang_dir` | Location of the standalone driver header and optional paths to the LLVM and Clang CMake package directories. |
 | `with_fftw`, `fftw_version`, `use_system_fftw`, `fftw_root` | FFTW provider, exact release, system-library selection, and optional installation prefix. Both float and double libraries are required. |
 | `with_cufft`, `cuda_toolkit_version`, `cuda_toolkit_root` | cuFFT plugin and its exact toolkit version and optional prefix. `auto` enables cuFFT when a toolkit version is specified and VkFFT is disabled. `True` explicitly requests cuFFT. |

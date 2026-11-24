@@ -34,7 +34,7 @@ class SyclFftConan(ConanFile):
         "cuda_toolkit_version": [None, "ANY"],
         "cuda_toolkit_root": [None, "ANY"],
         "with_vkfft": [True, False],
-        "llvm_version": ["ANY"],
+        "llvm_version": [None, "ANY"],
         "llvm_dir": [None, "ANY"],
         "clang_dir": [None, "ANY"],
         "cuda_driver_include_dir": [None, "ANY"],
@@ -56,7 +56,7 @@ class SyclFftConan(ConanFile):
         "cuda_toolkit_version": None,
         "cuda_toolkit_root": None,
         "with_vkfft": False,
-        "llvm_version": "20.1.8",
+        "llvm_version": None,
         "llvm_dir": None,
         "clang_dir": None,
         "cuda_driver_include_dir": None,
@@ -120,8 +120,14 @@ class SyclFftConan(ConanFile):
             self.requires(f"cuda-toolkit-system/{self.options.cuda_toolkit_version}",
                           headers=False, libs=False, run=True, package_id_mode="full_mode")
         if self.options.with_vkfft:
+            version = str(self.options.llvm_version)
+            if not re.fullmatch(r"(?:1[5-9]|2[01])\.\d+\.\d+", version):
+                raise ConanInvalidConfiguration(
+                    "Set llvm_version to AdaptiveCpp's exact LLVM release "
+                    "(major 15 through 21), e.g. -o 'syclfft/*:llvm_version=19.1.7'"
+                )
             self.requires("vkfft-driver/1.3.4", transitive_headers=False, package_id_mode="full_mode")
-            self.requires(f"clang-cpp-system/{self.options.llvm_version}",
+            self.requires(f"clang-cpp-system/{version}",
                           headers=False, libs=False, run=True, package_id_mode="full_mode")
 
     def build_requirements(self):
@@ -151,8 +157,6 @@ class SyclFftConan(ConanFile):
         if self.options.with_vkfft:
             if self.settings.os != "Linux" or not self._with_adaptivecpp:
                 raise ConanInvalidConfiguration("with_vkfft requires Linux and AdaptiveCpp SYCL")
-            if not re.fullmatch(r"20\.\d+\.\d+", str(self.options.llvm_version)):
-                raise ConanInvalidConfiguration("with_vkfft requires an exact LLVM 20 llvm_version")
             if cross_building(self):
                 raise ConanInvalidConfiguration("with_vkfft requires a native build")
 

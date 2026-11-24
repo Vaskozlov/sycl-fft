@@ -39,6 +39,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(SyclfftProviders)
 
 add_library(syclfft_core SHARED src/core/provider_loader.cpp)
 add_library(syclfft::core ALIAS syclfft_core)
@@ -49,14 +50,9 @@ target_include_directories(syclfft_core
 )
 target_compile_definitions(syclfft_core PRIVATE SYCLFFT_BUILDING_CORE)
 target_compile_features(syclfft_core PUBLIC cxx_std_17)
-set_target_properties(syclfft_core PROPERTIES
-  EXPORT_NAME core
-  VERSION ${PROJECT_VERSION}
-  SOVERSION 0
-)
-if(CMAKE_DL_LIBS)
-  target_link_libraries(syclfft_core PRIVATE ${CMAKE_DL_LIBS})
-endif()
+set_target_properties(syclfft_core PROPERTIES EXPORT_NAME core)
+target_link_libraries(syclfft_core PRIVATE ${CMAKE_DL_LIBS})
+set(_syclfft_libraries syclfft_core)
 
 if(WIN32)
   set(SYCLFFT_INSTALL_PROVIDER_DIR "${CMAKE_INSTALL_BINDIR}/syclfft/providers")
@@ -65,44 +61,7 @@ else()
 endif()
 set(SYCLFFT_BUILD_PROVIDER_DIR "${CMAKE_BINARY_DIR}/syclfft/providers")
 
-string(TOUPPER "${SYCLFFT_FFTW}" _syclfft_fftw)
-if(_syclfft_fftw STREQUAL "TRUE")
-  set(_syclfft_fftw "ON")
-elseif(_syclfft_fftw STREQUAL "FALSE")
-  set(_syclfft_fftw "OFF")
-elseif(NOT _syclfft_fftw MATCHES "^(AUTO|ON|OFF)$")
-  message(FATAL_ERROR "SYCLFFT_FFTW must be AUTO, ON, or OFF")
-endif()
-
-if(NOT _syclfft_fftw STREQUAL "OFF")
-  if(SYCLFFT_USE_SYSTEM_FFTW)
-    if(SYCLFFT_EXPECTED_FFTW_VERSION)
-      find_package(FFTW3 "${SYCLFFT_EXPECTED_FFTW_VERSION}" EXACT MODULE REQUIRED)
-    else()
-      find_package(FFTW3 MODULE QUIET)
-    endif()
-  else()
-    find_package(FFTW3 CONFIG QUIET)
-  endif()
-  if(TARGET FFTW3::fftw3 AND TARGET FFTW3::fftw3f)
-    add_library(syclfft_provider_fftw MODULE src/providers/fftw/fftw_provider.cpp)
-    target_link_libraries(syclfft_provider_fftw PRIVATE FFTW3::fftw3 FFTW3::fftw3f)
-    target_include_directories(syclfft_provider_fftw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    set_target_properties(syclfft_provider_fftw PROPERTIES
-      PREFIX ""
-      LIBRARY_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-      RUNTIME_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-    )
-    install(TARGETS syclfft_provider_fftw
-      LIBRARY DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-      RUNTIME DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-    )
-  elseif(_syclfft_fftw STREQUAL "ON")
-    message(FATAL_ERROR "SYCLFFT_FFTW=ON, but FFTW3::fftw3 and FFTW3::fftw3f were not found")
-  else()
-    message(STATUS "FFTW3 not found; FFTW provider will not be built")
-  endif()
-endif()
+syclfft_configure_fftw()
 
 if(SYCLFFT_BUILD_SYCL)
   add_library(syclfft_sycl SHARED src/sycl/sycl.cpp)
@@ -115,11 +74,8 @@ if(SYCLFFT_BUILD_SYCL)
     "${CMAKE_CURRENT_BINARY_DIR}/include/syclfft/detail/sycl_ext_complex.hpp" COPYONLY)
   target_include_directories(syclfft_sycl
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>)
-  set_target_properties(syclfft_sycl PROPERTIES
-    EXPORT_NAME sycl
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0
-  )
+  set_target_properties(syclfft_sycl PROPERTIES EXPORT_NAME sycl)
+  list(APPEND _syclfft_libraries syclfft_sycl)
 
   if(SYCLFFT_SYCL_IMPLEMENTATION STREQUAL "AdaptiveCpp")
     if(SYCLFFT_EXPECTED_ACPP_VERSION)
@@ -137,73 +93,25 @@ if(SYCLFFT_BUILD_SYCL)
     message(FATAL_ERROR "SYCLFFT_SYCL_IMPLEMENTATION must be AdaptiveCpp or DPCPP")
   endif()
 
-  string(TOUPPER "${SYCLFFT_CUFFT}" _syclfft_cufft)
-  if(_syclfft_cufft STREQUAL "TRUE")
-    set(_syclfft_cufft "ON")
-  elseif(_syclfft_cufft STREQUAL "FALSE")
-    set(_syclfft_cufft "OFF")
-  elseif(NOT _syclfft_cufft MATCHES "^(AUTO|ON|OFF)$")
-    message(FATAL_ERROR "SYCLFFT_CUFFT must be AUTO, ON, or OFF")
-  endif()
-  if(SYCLFFT_VKFFT AND _syclfft_cufft STREQUAL "AUTO")
-    set(_syclfft_cufft "OFF")
-    message(STATUS "VkFFT enabled; skipping automatic cuFFT CUDA Toolkit discovery")
-  endif()
-  if(NOT _syclfft_cufft STREQUAL "OFF")
-    if(SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION)
-      find_package(CUDAToolkit "${SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION}" EXACT REQUIRED)
-    else()
-      find_package(CUDAToolkit QUIET)
-    endif()
-    if(CUDAToolkit_FOUND)
-      add_library(syclfft_provider_cufft MODULE src/providers/cufft/cufft_provider.cpp)
-      target_link_libraries(syclfft_provider_cufft PRIVATE syclfft_sycl CUDA::cufft CUDA::cudart)
-      target_include_directories(syclfft_provider_cufft PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-      set_target_properties(syclfft_provider_cufft PROPERTIES
-        PREFIX ""
-        LIBRARY_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
-      )
-      if(SYCLFFT_SYCL_IMPLEMENTATION STREQUAL "AdaptiveCpp")
-        add_sycl_to_target(TARGET syclfft_provider_cufft SOURCES src/providers/cufft/cufft_provider.cpp)
-      else()
-        target_compile_options(syclfft_provider_cufft PRIVATE -fsycl)
-        target_link_options(syclfft_provider_cufft PRIVATE -fsycl)
-      endif()
-      install(TARGETS syclfft_provider_cufft
-        LIBRARY DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-        RUNTIME DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
-      )
-      target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_HAS_CUFFT_PROVIDER=1)
-    elseif(_syclfft_cufft STREQUAL "ON")
-      message(FATAL_ERROR "SYCLFFT_CUFFT=ON, but CUDAToolkit was not found")
-    else()
-      message(STATUS "CUDAToolkit not found; cuFFT provider will not be built")
-    endif()
-  endif()
+  syclfft_configure_cufft()
 
   if(SYCLFFT_VKFFT)
-    include(cmake/SyclfftVkFFT.cmake)
+    include(SyclfftVkFFT)
     syclfft_add_vkfft_provider()
+  endif()
+
+  if(TARGET syclfft_provider_fftw)
+    target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_HAS_FFTW_PROVIDER=1)
   endif()
 endif()
 
-if(TARGET syclfft_sycl AND TARGET syclfft_provider_fftw)
-  target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_HAS_FFTW_PROVIDER=1)
-endif()
-
-install(TARGETS syclfft_core
+set_target_properties(${_syclfft_libraries} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
+install(TARGETS ${_syclfft_libraries}
   EXPORT syclfftTargets
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-if(TARGET syclfft_sycl)
-  install(TARGETS syclfft_sycl EXPORT syclfftTargets
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES third_party/syclcplx/sycl_ext_complex.hpp

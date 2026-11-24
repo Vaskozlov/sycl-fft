@@ -7,6 +7,7 @@
 #include <iterator>
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -136,11 +137,13 @@ __device__ inline void __sincosf(float a, float *s, float *c)
             llvm::MemoryBuffer::getMemBufferCopy(
                 std::string(cuda_prelude) + "\n#line 1 \"VkFFT-generated.cu\"\n" + source));
 
-        auto invocation = std::make_shared<clang::CompilerInvocation>();
         compiler_diagnostics diagnostic_consumer(diagnostics);
         clang::CompilerInstance compiler;
-        compiler.setInvocation(invocation);
+#if LLVM_VERSION_MAJOR >= 20
         compiler.createDiagnostics(*filesystem, &diagnostic_consumer, false);
+#else
+        compiler.createDiagnostics(&diagnostic_consumer, false);
+#endif
 
         const char *arguments[] = {
             "-triple",
@@ -159,7 +162,7 @@ __device__ inline void __sincosf(float a, float *s, float *c)
             source_path,
         };
         if (!clang::CompilerInvocation::CreateFromArgs(
-                *invocation, arguments, compiler.getDiagnostics())) {
+                compiler.getInvocation(), arguments, compiler.getDiagnostics())) {
             return false;
         }
 

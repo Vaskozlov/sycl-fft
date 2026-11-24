@@ -226,6 +226,23 @@ and `fftw-system/3.3.10`, plus the local driver-only AdaptiveCpp installation.
 Build logs and per-configuration results are in
 `~/syclfft-review/conan.1jvUfI` on the WSL machine.
 
+## LLVM 15–21 verification
+
+The helper compiled 14 VkFFT-generated kernels for `sm_75` with LLVM
+15.0.6, 16.0.6, 17.0.6, 18.1.3, 19.1.7, 20.1.8 and 21.1.8. The cases
+covered lengths 1,000, 4,093 and 4,096 at batch 32 in FP32 and FP64.
+A driver-only Debian build with LLVM 15 also passed the installed Conan
+consumer test on its CPU backend.
+
+On WSL, the installed LLVM 20.1.8 build selected VkFFT automatically on the
+GTX 1660 SUPER with the Toolkit hidden. All 256 full-spectrum comparisons
+at lengths 4,096 and 4,093 passed. To exercise the endpoints on the same
+GPU, we captured the generated CUDA sources, compiled them with the LLVM
+15 and 21 helpers, then supplied each set of PTX to the WSL provider.
+All six shape/precision combinations per release passed the benchmark's
+sampled DFT checks. Build logs, captured sources, PTX and comparison results
+are in `~/syclfft-review/llvm-range.5uUAS0` on WSL.
+
 ## AdaptiveCpp shared USM on WSL
 
 During the Conan consumer test, the driver-only AdaptiveCpp revision

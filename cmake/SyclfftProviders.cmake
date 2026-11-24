@@ -1,0 +1,87 @@
+include_guard(DIRECTORY)
+
+function(syclfft_add_provider name)
+  set(target "syclfft_provider_${name}")
+  add_library(${target} MODULE ${ARGN})
+  target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(${target} PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${SYCLFFT_BUILD_PROVIDER_DIR}"
+  )
+  install(TARGETS ${target}
+    LIBRARY DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
+    RUNTIME DESTINATION "${SYCLFFT_INSTALL_PROVIDER_DIR}"
+  )
+endfunction()
+
+function(syclfft_provider_mode option output)
+  string(TOUPPER "${${option}}" mode)
+  if(mode STREQUAL "TRUE")
+    set(mode ON)
+  elseif(mode STREQUAL "FALSE")
+    set(mode OFF)
+  elseif(NOT mode MATCHES "^(AUTO|ON|OFF)$")
+    message(FATAL_ERROR "${option} must be AUTO, ON, or OFF")
+  endif()
+  set(${output} "${mode}" PARENT_SCOPE)
+endfunction()
+
+function(syclfft_configure_fftw)
+  syclfft_provider_mode(SYCLFFT_FFTW mode)
+  if(mode STREQUAL "OFF")
+    return()
+  endif()
+
+  if(SYCLFFT_USE_SYSTEM_FFTW)
+    if(SYCLFFT_EXPECTED_FFTW_VERSION)
+      find_package(FFTW3 "${SYCLFFT_EXPECTED_FFTW_VERSION}" EXACT MODULE REQUIRED)
+    else()
+      find_package(FFTW3 MODULE QUIET)
+    endif()
+  else()
+    find_package(FFTW3 CONFIG QUIET)
+  endif()
+
+  if(TARGET FFTW3::fftw3 AND TARGET FFTW3::fftw3f)
+    syclfft_add_provider(fftw src/providers/fftw/fftw_provider.cpp)
+    target_link_libraries(syclfft_provider_fftw PRIVATE FFTW3::fftw3 FFTW3::fftw3f)
+  elseif(mode STREQUAL "ON")
+    message(FATAL_ERROR "SYCLFFT_FFTW=ON, but FFTW3::fftw3 and FFTW3::fftw3f were not found")
+  else()
+    message(STATUS "FFTW3 not found; FFTW provider will not be built")
+  endif()
+endfunction()
+
+function(syclfft_configure_cufft)
+  syclfft_provider_mode(SYCLFFT_CUFFT mode)
+  if(mode STREQUAL "OFF")
+    return()
+  endif()
+  if(SYCLFFT_VKFFT AND mode STREQUAL "AUTO")
+    message(STATUS "VkFFT enabled; skipping automatic cuFFT CUDA Toolkit discovery")
+    return()
+  endif()
+
+  if(SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION)
+    find_package(CUDAToolkit "${SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION}" EXACT REQUIRED)
+  else()
+    find_package(CUDAToolkit QUIET)
+  endif()
+
+  if(NOT CUDAToolkit_FOUND)
+    if(mode STREQUAL "ON")
+      message(FATAL_ERROR "SYCLFFT_CUFFT=ON, but CUDAToolkit was not found")
+    endif()
+    message(STATUS "CUDAToolkit not found; cuFFT provider will not be built")
+    return()
+  endif()
+
+  set(source src/providers/cufft/cufft_provider.cpp)
+  syclfft_add_provider(cufft "${source}")
+  target_link_libraries(syclfft_provider_cufft PRIVATE syclfft_sycl CUDA::cufft CUDA::cudart)
+  if(SYCLFFT_SYCL_IMPLEMENTATION STREQUAL "AdaptiveCpp")
+    add_sycl_to_target(TARGET syclfft_provider_cufft SOURCES "${source}")
+  endif()
+  target_compile_definitions(syclfft_sycl PRIVATE SYCLFFT_HAS_CUFFT_PROVIDER=1)
+endfunction()
