@@ -126,7 +126,7 @@ class SyclFftConan(ConanFile):
             # Cross profiles supply target development files through their sysroot.
             return
         if self._with_adaptivecpp and self.settings.os == "Linux":
-            # Both the SYCL compiler and VkFFT need the development toolchain when building.
+            # Linux splits the development toolchain from the runtime libraries.
             self.tool_requires("clang-cpp-system/<host_version>",
                                options={"development": True})
         if self._with_system_fftw:
@@ -205,6 +205,11 @@ class SyclFftConan(ConanFile):
             str(self.options.cuda_toolkit_version) if self._with_cufft else ""
         )
         if self.options.with_vkfft:
+            llvm = self.dependencies.build["clang-cpp-system"].cpp_info
+            for name in ("LLVM", "Clang"):
+                directory = llvm.get_property(f"{name.lower()}_cmake_dir")
+                if directory:
+                    cache[f"{name}_DIR"] = directory
             cache["SYCLFFT_VKFFT_INCLUDE_DIR"] = self.dependencies["vkfft"].cpp_info.includedirs[0]
         toolchain.generate()
 

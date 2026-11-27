@@ -139,7 +139,7 @@ recipe revision, and binary configuration participate in syclfft's package ID.
 ### Local AdaptiveCpp and VkFFT
 
 From the sycl-fft checkout, register the public custom recipe index once
-and export the local AdaptiveCpp recipes. This Linux example uses the
+and export AdaptiveCpp from its source checkout. This Linux example uses the
 `../conan/index` checkout, the sibling AdaptiveCpp checkout on
 `feature/cuda-driver-only-packaging` and distro LLVM 20. Use the
 `llvm-config` for your installed LLVM release (15–21). On a fresh Conan
@@ -148,21 +148,36 @@ installation, run `conan profile detect` once. To obtain the index, run
 
 ```sh
 conan remote add custom-index ../conan/index
-conan export ../AdaptiveCpp/recipes/clang-cpp-system --version="$(llvm-config-20 --version)"
 conan export ../AdaptiveCpp
 
 conan create . -r=custom-index --build=missing -s compiler.cppstd=17 \
+  -o "adaptivecpp/*:llvm_version=$(llvm-config-20 --version)" \
   -o 'syclfft/*:with_vkfft=True' \
   -o 'syclfft/*:with_fftw=False' \
   -o 'syclfft/*:build_tests=True'
 ```
 
-With this index and the exported recipes, Conan selects the newest locally
-exported AdaptiveCpp release. AdaptiveCpp resolves the newest supported
-`clang-cpp-system` release in that cache and checks it against the installed
-LLVM. To repeat the same resolution on a later build, add `--lockfile-out=conan.lock` to
-the first create command and `--lockfile=conan.lock` to the next. The host
-compiler comes from your ordinary Conan profile.
+The index supplies the external `clang-cpp-system/<release>` recipe.
+Use `conan list 'clang-cpp-system/*' -r=custom-index` to see its releases.
+Select the **exact installed LLVM version** once in your Conan host profile
+or on the command line as above. This gives AdaptiveCpp and the VkFFT
+compiler matching LLVM libraries and tools. The compiler for ordinary
+host C++ code still comes from the Conan profile. For a custom SDK prefix,
+add `-c:a 'user.llvm:root=/path/to/llvm'`.
+
+If you previously exported the LLVM recipe from AdaptiveCpp, add
+`--update=clang-cpp-system` to your first indexed build to replace the
+cached recipe revision. Without an explicit version, Conan resolves a
+range from its cache or the index. The result can differ from the
+installed LLVM release. For an unlisted patch release in LLVM 15–21, export the same
+recipe locally and select that release:
+
+```sh
+conan export ../conan/index/recipes/clang-cpp-system/all --version="$(llvm-config --version)"
+```
+
+To repeat a dependency resolution, add `--lockfile-out=conan.lock` to the
+first create command and `--lockfile=conan.lock` to the next.
 
 The index provides `vkfft/1.3.4-driver.1`. The recipe downloads the
 upstream VkFFT 1.3.4 archive on first use, verifies its SHA-256 and
@@ -180,12 +195,14 @@ link `syclfft::sycl`. AdaptiveCpp consumers apply `add_sycl_to_target` to
 their own SYCL sources. The [consumer test](test_package/CMakeLists.txt)
 shows the complete target setup. Core-only builds expose `syclfft::core`.
 
-On macOS, export the AdaptiveCpp recipe and set
-`adaptivecpp/*:llvm_version` to your installed upstream LLVM release in
-the host profile. Set `adaptivecpp/*:with_cuda=False` for a CPU build.
+On macOS, select upstream LLVM the same way. For a Homebrew LLVM 20 CPU
+build, use the release from `"$(brew --prefix llvm@20)/bin/llvm-config" --version`
+and set `adaptivecpp/*:with_cuda=False`.
 On Windows, DPC++ is the default. To select AdaptiveCpp, export the fork's
 `recipes/adaptivecpp-llvm` recipe and set
-`syclfft/*:sycl_implementation=adaptivecpp` in the host profile.
+`syclfft/*:sycl_implementation=adaptivecpp` in the host profile. That SDK
+builds AdaptiveCpp passes into its own LLVM. Other Windows projects can
+select the indexed system wrapper for a complete external LLVM/Clang SDK.
 
 ### Open DPC++
 
@@ -240,7 +257,8 @@ verifies it against the installation it finds. With the AdaptiveCpp recipes
 exported as above, a CUDA 13.5.37 build uses the following options.
 
 ```sh
-conan create . --no-remote --build=missing -s compiler.cppstd=17 \
+conan create . -r=custom-index --build=missing -s compiler.cppstd=17 \
+  -o "adaptivecpp/*:llvm_version=$(llvm-config-20 --version)" \
   -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=True' \
   -o 'syclfft/*:cuda_toolkit_version=13.5.37'
 ```

@@ -19,10 +19,11 @@ CMake 3.22+, C++17, **shared libraries only** (static builds are a fatal error).
 Use Conan options for syclfft features and dependency versions. See the
 [Conan build instructions](README.md#conan-2) for the driver-only CUDA
 configuration, optional dependency recipes, and the list of supported options.
-For a Linux OpenMP build, export the local recipes as described there, then run
+For a Linux OpenMP build, register the shared index and export AdaptiveCpp as described there, then run
 
 ```sh
 conan build . --build=missing -s compiler.cppstd=17 \
+  -o "adaptivecpp/*:llvm_version=$(llvm-config-20 --version)" \
   -o 'adaptivecpp/*:with_cuda=False' -o 'syclfft/*:acpp_targets=omp' \
   -o 'syclfft/*:build_tests=True'
 ```

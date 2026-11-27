@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  ACPP_CONAN_REVISION: "7672bae5462c7b84792c43340b0ba5dea28984a1"
-  CONAN_INDEX_REVISION: "7edf902ac283e980e813be9a206a1989eeef0dcc"
+  ACPP_CONAN_REVISION: "9ce2265519e4452659e0dc33079e539ca16d7404"
+  CONAN_INDEX_REVISION: "540ed2d38704f78f9dbff511687aee245241b67c"
   DPCPP_VERSION: "6.3.0"
 
 jobs:
@@ -105,11 +105,11 @@ jobs:
           python -m pip install conan==2.34.0
           conan profile detect
           conan remote add custom-index "$RUNNER_TEMP/recipe-index"
-          conan export adaptivecpp-source/recipes/clang-cpp-system --version="$(llvm-config-18 --version)"
-          conan create adaptivecpp-source --no-remote --build=missing \
-            -s compiler.cppstd=17 -c:a tools.build:jobs=2
+          llvm_release="$(llvm-config-18 --version)"
+          conan create adaptivecpp-source -r=custom-index --build=missing \
+            -s compiler.cppstd=17 -c:a tools.build:jobs=2 -o "adaptivecpp/*:llvm_version=$llvm_release"
           conan create . -r=custom-index --build=missing \
-            -s compiler.cppstd=17 -c:a tools.build:jobs=2 \
+            -s compiler.cppstd=17 -c:a tools.build:jobs=2 -o "adaptivecpp/*:llvm_version=$llvm_release" \
             -c:h 'syclfft/*:tools.build:cxxflags=["-Werror=c++20-extensions"]' \
             -o 'syclfft/*:fftw_version=system' -o 'syclfft/*:with_vkfft=True' \
             -o 'syclfft/*:build_tests=True' -o 'syclfft/*:with_cufft=False' \
