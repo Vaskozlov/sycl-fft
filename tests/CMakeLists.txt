@@ -16,6 +16,11 @@ add_test(NAME syclfft.plugin-abi COMMAND syclfft_plugin_tests)
 set_tests_properties(syclfft.plugin-abi PROPERTIES
   ENVIRONMENT "SYCLFFT_PLUGIN_PATH=${CMAKE_CURRENT_BINARY_DIR}/bad-provider")
 
+if(WIN32)
+  set_property(TEST syclfft.span syclfft.plugin-abi PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:syclfft_core>")
+endif()
+
 if(TARGET syclfft_sycl)
   add_executable(syclfft_sycl_tests sycl_tests.cpp)
   target_include_directories(syclfft_sycl_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -26,4 +31,13 @@ if(TARGET syclfft_sycl)
   add_test(NAME syclfft.sycl COMMAND syclfft_sycl_tests)
   set_tests_properties(syclfft.sycl PROPERTIES
     ENVIRONMENT "SYCLFFT_PLUGIN_PATH=${SYCLFFT_BUILD_PROVIDER_DIR}")
+  if(WIN32)
+    set_property(TEST syclfft.sycl PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:syclfft_core>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:syclfft_sycl>")
+    if(TARGET AdaptiveCpp::acpp-rt)
+      set_property(TEST syclfft.sycl APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:AdaptiveCpp::acpp-rt>")
+    endif()
+  endif()
 endif()

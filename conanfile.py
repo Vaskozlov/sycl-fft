@@ -193,8 +193,15 @@ class SyclFftConan(ConanFile):
 
         self._set_package_locations(cache)
         if self._with_adaptivecpp:
-            builddirs = self._adaptivecpp_dependency.cpp_info.builddirs
+            sdk = self._adaptivecpp_dependency
+            builddirs = sdk.cpp_info.builddirs
             cache["AdaptiveCpp_DIR"] = builddirs[0].replace("\\", "/")
+            if self.settings.os == "Windows" and not cross_building(self):
+                # The integrated SDK ships the compiler for its own SYCL passes.
+                compilers = sdk.conf_info.get("tools.build:compiler_executables", check_type=dict)
+                toolchain.blocks["compilers"].values["compilers"].update(
+                    C=compilers["c"], CXX=compilers["cpp"],
+                )
         if self.options.get_safe("acpp_targets"):
             cache["ACPP_TARGETS"] = str(self.options.acpp_targets)
         fftw_version = self.options.get_safe("fftw_version")

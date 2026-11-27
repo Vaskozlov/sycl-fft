@@ -5,7 +5,6 @@ then enable the benchmark in a Release build.
 
 ```sh
 conan build . -r=custom-index --build=missing -s compiler.cppstd=17 -s build_type=Release \
-  -o "adaptivecpp/*:llvm_version=$(llvm-config-20 --version)" \
   -o 'syclfft/*:build_benchmarks=True' -o 'syclfft/*:with_vkfft=True' \
   -o 'syclfft/*:with_fftw=False'
 export SYCLFFT_PLUGIN_PATH="$PWD/build/Release/syclfft/providers"

@@ -1,7 +1,7 @@
 import os
 
 from conan import ConanFile
-from conan.tools.build import can_run, cmd_args_to_string
+from conan.tools.build import can_run, cmd_args_to_string, cross_building
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 
 
@@ -21,6 +21,16 @@ class SyclFftTestPackage(ConanFile):
         targets = dependency.options.get_safe("acpp_targets")
         if targets:
             toolchain.cache_variables["ACPP_TARGETS"] = str(targets)
+        if (
+            self.settings.os == "Windows"
+            and not cross_building(self)
+            and "adaptivecpp-llvm" in self.dependencies.host
+        ):
+            sdk = self.dependencies.host["adaptivecpp-llvm"]
+            compilers = sdk.conf_info.get("tools.build:compiler_executables", check_type=dict)
+            toolchain.blocks["compilers"].values["compilers"].update(
+                C=compilers["c"], CXX=compilers["cpp"],
+            )
         toolchain.generate()
         CMakeDeps(self).generate()
 

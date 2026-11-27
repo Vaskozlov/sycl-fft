@@ -1,4 +1,4 @@
-# Set ACPP_LLVM_VERSION to use that distro Clang as the host compiler too.
+# Set ACPP_LLVM_VERSION to a major (e.g. 20) to use distro Clang for host code too.
 include(default)
 
 [conf]
@@ -9,7 +9,7 @@ tools.cmake.cmaketoolchain:generator=Ninja
 tools.build:compiler_executables={"c":"clang-{{ major }}","cpp":"clang++-{{ major }}"}
 
 [options]
-adaptivecpp/*:llvm_version={{ release }}
+adaptivecpp/*:llvm_version={{ major }}
 {% endif %}
 
 [settings]
