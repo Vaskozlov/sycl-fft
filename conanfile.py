@@ -26,7 +26,7 @@ class SyclFftConan(ConanFile):
         "acpp_targets": [None, "ANY"],
         "with_fftw": [True, False],
         "use_system_fftw": [True, False],
-        "fftw_version": ["ANY"],
+        "fftw_version": [None, "ANY"],
         "fftw_root": [None, "ANY"],
         "with_cufft": ["auto", True, False],
         "cuda_toolkit_version": [None, "ANY"],
@@ -42,19 +42,19 @@ class SyclFftConan(ConanFile):
         "acpp_targets": "generic",
         "with_fftw": True,
         "use_system_fftw": False,
-        "fftw_version": "3.3.10",
+        "fftw_version": None,
         "fftw_root": None,
         "with_cufft": "auto",
         "cuda_toolkit_version": None,
         "cuda_toolkit_root": None,
         "with_vkfft": False,
-        "fftw/*:shared": False,
-        "fftw/*:precision_single": True,
-        "fftw/*:precision_double": True,
-        "fftw/*:precision_longdouble": False,
-        "fftw/*:precision_quad": False,
-        "fftw/*:openmp": False,
-        "fftw/*:threads": False,
+        "fftw/3*:shared": False,
+        "fftw/3*:precision_single": True,
+        "fftw/3*:precision_double": True,
+        "fftw/3*:precision_longdouble": False,
+        "fftw/3*:precision_quad": False,
+        "fftw/3*:openmp": False,
+        "fftw/3*:threads": False,
     }
     exports_sources = (
         "CMakeLists.txt", "cmake/*", "include/*", "src/*", "third_party/*",
@@ -69,13 +69,17 @@ class SyclFftConan(ConanFile):
         if not self.options.with_fftw:
             self.options.rm_safe("use_system_fftw")
             self.options.rm_safe("fftw_version")
-        if not self.options.get_safe("use_system_fftw"):
+        if not self._with_system_fftw:
             self.options.rm_safe("fftw_root")
         if not self._with_cufft:
             self.options.rm_safe("cuda_toolkit_root")
             self.options.rm_safe("cuda_toolkit_version")
         if not self._with_adaptivecpp:
             self.options.rm_safe("acpp_targets")
+
+    @property
+    def _with_system_fftw(self):
+        return self.options.get_safe("use_system_fftw") or self.options.get_safe("fftw_version") == "system"
 
     @property
     def _with_adaptivecpp(self):
@@ -104,19 +108,17 @@ class SyclFftConan(ConanFile):
             self.requires(f"{self._adaptivecpp_package}/{versions}", package_id_mode="full_mode",
                           transitive_headers=True, transitive_libs=True)
         if self.options.with_fftw:
-            version = self.options.fftw_version
-            if self.options.use_system_fftw:
-                self.requires(f"fftw-system/{version}", headers=False, libs=False, run=True,
+            if self._with_system_fftw:
+                self.requires("fftw/system", options={"development": False},
+                              headers=False, libs=False, run=True,
                               package_id_mode="full_mode")
             else:
+                version = self.options.fftw_version or "3.3.10"
                 self.requires(f"fftw/{version}")
-        if self._with_cufft and self.options.get_safe("cuda_toolkit_version"):
-            self.requires(f"cuda-toolkit-system/{self.options.cuda_toolkit_version}",
-                          headers=False, libs=False, run=True, package_id_mode="full_mode")
         if self.options.with_vkfft:
             if self.settings.os != "Linux" or not self._with_adaptivecpp:
                 raise ConanInvalidConfiguration("with_vkfft requires Linux and AdaptiveCpp SYCL")
-            self.requires("vkfft-driver/1.3.4", transitive_headers=False, package_id_mode="full_mode")
+            self.requires("vkfft/1.3.4-driver.1", transitive_headers=False, package_id_mode="full_mode")
 
     def build_requirements(self):
         # Development packages belong only to machines building syclfft from source.
@@ -127,22 +129,24 @@ class SyclFftConan(ConanFile):
             # Both the SYCL compiler and VkFFT need the development toolchain when building.
             self.tool_requires("clang-cpp-system/<host_version>",
                                options={"development": True})
-        if self.options.get_safe("use_system_fftw"):
-            self.tool_requires("fftw-system/<host_version>",
-                               options={"development": True})
-        if self._with_cufft and self.options.get_safe("cuda_toolkit_version"):
-            self.tool_requires("cuda-toolkit-system/<host_version>",
+        if self._with_system_fftw:
+            self.tool_requires("fftw/<host_version>",
                                options={"development": True})
 
     def validate(self):
         check_min_cppstd(self, "17")
         if self.options.build_benchmarks and not self.options.build_sycl:
             raise ConanInvalidConfiguration("build_benchmarks requires build_sycl")
-        if self.options.with_cufft != "auto" and self.options.with_cufft:
-            if not self.options.build_sycl:
-                raise ConanInvalidConfiguration("with_cufft requires build_sycl")
+        if self.options.with_cufft != "auto" and self.options.with_cufft and not self.options.build_sycl:
+            raise ConanInvalidConfiguration("with_cufft requires build_sycl")
+        if self._with_cufft:
+            if self.settings.os not in ("Linux", "Windows"):
+                raise ConanInvalidConfiguration("with_cufft requires Linux or Windows")
             if not re.fullmatch(r"\d+\.\d+\.\d+", str(self.options.get_safe("cuda_toolkit_version"))):
-                raise ConanInvalidConfiguration("with_cufft requires an exact cuda_toolkit_version")
+                raise ConanInvalidConfiguration(
+                    "Set cuda_toolkit_version to the exact installed toolkit version "
+                    "reported by nvcc --version. Conan uses it to identify the cuFFT binary."
+                )
         if self.options.with_vkfft:
             if cross_building(self):
                 raise ConanInvalidConfiguration("with_vkfft requires a native build")
@@ -150,7 +154,11 @@ class SyclFftConan(ConanFile):
                 raise ConanInvalidConfiguration("with_vkfft requires adaptivecpp/*:with_cuda=True")
 
     def package_id(self):
-        # These paths select installations of versions already declared in the graph.
+        if self.info.options.get_safe("with_fftw"):
+            system = self.info.options.use_system_fftw or self.info.options.fftw_version == "system"
+            self.info.options.fftw_version = self.info.options.fftw_version or ("system" if system else "3.3.10")
+            self.info.options.use_system_fftw = bool(system)
+        # Installation paths are specific to the build machine.
         for path in ("fftw_root", "cuda_toolkit_root"):
             self.info.options.rm_safe(path)
 
@@ -164,8 +172,7 @@ class SyclFftConan(ConanFile):
         }
         for option, variable in paths.items():
             value = self.options.get_safe(option)
-            if value:
-                cache[variable] = str(value).replace("\\", "/")
+            cache[variable] = str(value).replace("\\", "/") if value else ""
 
     def generate(self):
         CMakeDeps(self).generate()
@@ -178,7 +185,7 @@ class SyclFftConan(ConanFile):
             "SYCLFFT_BUILD_EXAMPLES": bool(self.options.build_examples),
             "SYCLFFT_BUILD_BENCHMARKS": bool(self.options.build_benchmarks),
             "SYCLFFT_FFTW": "ON" if self.options.with_fftw else "OFF",
-            "SYCLFFT_USE_SYSTEM_FFTW": bool(self.options.get_safe("use_system_fftw")),
+            "SYCLFFT_USE_SYSTEM_FFTW": bool(self._with_system_fftw),
             "SYCLFFT_SYCL_IMPLEMENTATION": "AdaptiveCpp" if self._with_adaptivecpp else "DPCPP",
             "SYCLFFT_CUFFT": "ON" if self._with_cufft else "OFF",
             "SYCLFFT_VKFFT": bool(self.options.with_vkfft),
@@ -190,14 +197,15 @@ class SyclFftConan(ConanFile):
             cache["AdaptiveCpp_DIR"] = builddirs[0].replace("\\", "/")
         if self.options.get_safe("acpp_targets"):
             cache["ACPP_TARGETS"] = str(self.options.acpp_targets)
-        if self.options.get_safe("use_system_fftw"):
-            cache["SYCLFFT_EXPECTED_FFTW_VERSION"] = str(self.dependencies["fftw-system"].ref.version)
-        if self._with_cufft:
-            cache["SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION"] = str(
-                self.dependencies["cuda-toolkit-system"].ref.version
-            )
+        fftw_version = self.options.get_safe("fftw_version")
+        cache["SYCLFFT_EXPECTED_FFTW_VERSION"] = (
+            str(fftw_version) if self._with_system_fftw and fftw_version and fftw_version != "system" else ""
+        )
+        cache["SYCLFFT_EXPECTED_CUDATOOLKIT_VERSION"] = (
+            str(self.options.cuda_toolkit_version) if self._with_cufft else ""
+        )
         if self.options.with_vkfft:
-            cache["SYCLFFT_VKFFT_INCLUDE_DIR"] = self.dependencies["vkfft-driver"].cpp_info.includedirs[0]
+            cache["SYCLFFT_VKFFT_INCLUDE_DIR"] = self.dependencies["vkfft"].cpp_info.includedirs[0]
         toolchain.generate()
 
     def build(self):

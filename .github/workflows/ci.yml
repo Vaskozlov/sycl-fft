@@ -10,6 +10,7 @@ permissions:
 
 env:
   ACPP_CONAN_REVISION: "7672bae5462c7b84792c43340b0ba5dea28984a1"
+  CONAN_INDEX_REVISION: "7edf902ac283e980e813be9a206a1989eeef0dcc"
   DPCPP_VERSION: "6.3.0"
 
 jobs:
@@ -81,11 +82,17 @@ jobs:
           repository: Vaskozlov/AdaptiveCpp
           ref: ${{ env.ACPP_CONAN_REVISION }}
           path: adaptivecpp-source
+      - name: Check out the custom Conan index
+        run: |
+          index="$RUNNER_TEMP/recipe-index"
+          git init --quiet "$index"
+          git -C "$index" fetch --quiet --depth=1 https://gitlab.vaskozlov.top/conan/index.git "$CONAN_INDEX_REVISION"
+          git -C "$index" checkout --quiet --detach FETCH_HEAD
       - name: Install build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install -y
           clang-18 llvm-18-dev libclang-18-dev lld-18 libomp-18-dev
-          cmake ninja-build
+          cmake ninja-build libfftw3-dev
           libboost-context-dev libboost-fiber-dev libboost-test-dev
       - uses: actions/setup-python@v6
         with:
@@ -97,15 +104,15 @@ jobs:
         run: |
           python -m pip install conan==2.34.0
           conan profile detect
+          conan remote add custom-index "$RUNNER_TEMP/recipe-index"
           conan export adaptivecpp-source/recipes/clang-cpp-system --version="$(llvm-config-18 --version)"
-          conan export recipes/vkfft
           conan create adaptivecpp-source --no-remote --build=missing \
             -s compiler.cppstd=17 -c:a tools.build:jobs=2
-          conan create . --no-remote --build=missing \
+          conan create . -r=custom-index --build=missing \
             -s compiler.cppstd=17 -c:a tools.build:jobs=2 \
             -c:h 'syclfft/*:tools.build:cxxflags=["-Werror=c++20-extensions"]' \
-            -o 'syclfft/*:with_vkfft=True' -o 'syclfft/*:build_tests=True' \
-            -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=False' \
+            -o 'syclfft/*:fftw_version=system' -o 'syclfft/*:with_vkfft=True' \
+            -o 'syclfft/*:build_tests=True' -o 'syclfft/*:with_cufft=False' \
             -o 'syclfft/*:acpp_targets=omp'
 
   linux-dpcpp-opencl:

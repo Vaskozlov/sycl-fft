@@ -138,38 +138,43 @@ recipe revision, and binary configuration participate in syclfft's package ID.
 
 ### Local AdaptiveCpp and VkFFT
 
-From the sycl-fft checkout, export the recipes to your local cache. This
-Linux example uses the sibling AdaptiveCpp checkout on
+From the sycl-fft checkout, register the public custom recipe index once
+and export the local AdaptiveCpp recipes. This Linux example uses the
+`../conan/index` checkout, the sibling AdaptiveCpp checkout on
 `feature/cuda-driver-only-packaging` and distro LLVM 20. Use the
 `llvm-config` for your installed LLVM release (15–21). On a fresh Conan
-installation, run `conan profile detect` once.
+installation, run `conan profile detect` once. To obtain the index, run
+`git clone https://gitlab.vaskozlov.top/conan/index.git ../conan/index`.
 
 ```sh
+conan remote add custom-index ../conan/index
 conan export ../AdaptiveCpp/recipes/clang-cpp-system --version="$(llvm-config-20 --version)"
 conan export ../AdaptiveCpp
-conan export recipes/vkfft
 
-conan create . --no-remote --build=missing -s compiler.cppstd=17 \
+conan create . -r=custom-index --build=missing -s compiler.cppstd=17 \
   -o 'syclfft/*:with_vkfft=True' \
   -o 'syclfft/*:with_fftw=False' \
   -o 'syclfft/*:build_tests=True'
 ```
 
-With `--no-remote`, Conan selects the newest locally exported AdaptiveCpp
-release. AdaptiveCpp resolves the newest supported `clang-cpp-system`
-release in that cache and checks it against the installed LLVM. To repeat
-the same resolution on a later build, add `--lockfile-out=conan.lock` to
+With this index and the exported recipes, Conan selects the newest locally
+exported AdaptiveCpp release. AdaptiveCpp resolves the newest supported
+`clang-cpp-system` release in that cache and checks it against the installed
+LLVM. To repeat the same resolution on a later build, add `--lockfile-out=conan.lock` to
 the first create command and `--lockfile=conan.lock` to the next. The host
 compiler comes from your ordinary Conan profile.
 
-The VkFFT recipe downloads its upstream archive on first use and verifies
-its SHA-256. The example disables FFTW so all Conan dependencies resolve
-locally. For CPU FFTW, use the system recipe below or resolve the default
-`fftw/3.3.10` from ConanCenter. Only the separate cuFFT provider requires
-an NVIDIA Toolkit.
+The index provides `vkfft/1.3.4-driver.1`. The recipe downloads the
+upstream VkFFT 1.3.4 archive on first use, verifies its SHA-256 and
+applies the CUDA Driver API patch. The example disables FFTW so its Conan
+dependencies resolve from the index and local cache. For CPU FFTW, use the
+system recipe below or resolve the default `fftw/3.3.10` from ConanCenter.
+Only the separate cuFFT provider requires an NVIDIA Toolkit.
 
 For development, use `conan build . --build=missing` with the same profile
-and options. A downstream Conan recipe can require `syclfft/0.1.0`. Its
+and options. When switching between installation prefixes in a local build,
+use a separate Conan output folder (`-of`) for each CMake cache.
+A downstream Conan recipe can require `syclfft/0.1.0`. Its
 CMake project can then use `find_package(syclfft CONFIG REQUIRED)` and
 link `syclfft::sycl`. AdaptiveCpp consumers apply `add_sycl_to_target` to
 their own SYCL sources. The [consumer test](test_package/CMakeLists.txt)
@@ -206,20 +211,49 @@ also requires a compatible SYCL device runtime. The portable FFT uses USM.
 | `sycl_implementation` | `adaptivecpp` or `dpcpp`. Select the host compiler through the normal Conan profile. |
 | `acpp_targets` | Target used to compile syclfft's own kernels, such as `generic` (default) or `omp`. |
 | `with_vkfft` | Enable VkFFT for Linux with a CUDA-enabled AdaptiveCpp package. LLVM follows the AdaptiveCpp dependency. |
-| `with_fftw`, `fftw_version`, `use_system_fftw`, `fftw_root` | FFTW provider, exact release, system-library selection, and optional installation prefix. Both float and double libraries are required. |
-| `with_cufft`, `cuda_toolkit_version`, `cuda_toolkit_root` | cuFFT plugin and its exact toolkit version and optional prefix. `auto` enables cuFFT when a toolkit version is specified and VkFFT is disabled. `True` explicitly requests cuFFT. |
+| `with_fftw`, `fftw_version` | Enable the FFTW provider (default). Select a ConanCenter release (default `3.3.10`) or `system` for the installed FP32 and FP64 libraries. |
+| `use_system_fftw`, `fftw_root` | Set `use_system_fftw=True` with a numeric `fftw_version` to require that exact installed release. Use `fftw_root` for a nonstandard installation prefix. |
+| `with_cufft`, `cuda_toolkit_version`, `cuda_toolkit_root` | Build the cuFFT plugin against an externally installed NVIDIA Toolkit. The default `auto` enables it when a version is supplied and VkFFT is disabled. Set `True` to request cuFFT explicitly. |
 
-For system FFTW, export `recipes/fftw-system` with the installed version,
-then set `use_system_fftw=True` and `fftw_version` to that version. For
-the cuFFT plugin, export `recipes/cuda-toolkit-system` with the exact installed
-toolkit version and set `cuda_toolkit_version` accordingly. For example:
+### System FFTW
+
+With the custom index registered as above, select `fftw_version=system`. This
+example builds the CPU provider and core library with your installed FFTW.
 
 ```sh
-conan export recipes/fftw-system --version=3.3.10
-conan export recipes/cuda-toolkit-system --version=13.5.37
+conan create . --build=missing -r=custom-index -s compiler.cppstd=17 \
+  -o 'syclfft/*:fftw_version=system' -o 'syclfft/*:build_sycl=False'
 ```
 
+This uses the installed FFTW 3 libraries. A Conan lockfile identifies the
+wrapper recipe. To pin the underlying FFTW release as well, use
+`-o 'syclfft/*:use_system_fftw=True' -o 'syclfft/*:fftw_version=3.3.10'`.
+When building, sycl-fft checks both precisions against this version.
+An application consuming the built provider needs their shared runtimes.
+
+### External CUDA Toolkit for cuFFT
+
+Install the CUDA Toolkit using your preferred NVIDIA installer or packages.
+Supply the exact toolkit release reported by `nvcc --version` (the value
+after `V`). Conan uses the version in the sycl-fft binary ID, and CMake
+verifies it against the installation it finds. With the AdaptiveCpp recipes
+exported as above, a CUDA 13.5.37 build uses the following options.
+
+```sh
+conan create . --no-remote --build=missing -s compiler.cppstd=17 \
+  -o 'syclfft/*:with_fftw=False' -o 'syclfft/*:with_cufft=True' \
+  -o 'syclfft/*:cuda_toolkit_version=13.5.37'
+```
+
+For multiple installations or a custom location, add
+`-o 'syclfft/*:cuda_toolkit_root=/path/to/cuda'`. Deployment of the cuFFT
+plugin needs the matching CUDA runtime and cuFFT shared libraries. For the
+driver-only build, select `with_vkfft=True` as shown above.
+
 ## Continuous integration
+
+The Linux AdaptiveCpp job builds `fftw/system` and the patched VkFFT
+provider from a pinned commit of the public custom index.
 
 The GitHub Actions workflow uses GitHub-hosted runners only. It covers
 AdaptiveCpp OpenMP CPU execution on macOS, Linux, and Windows; the optional FFTW
